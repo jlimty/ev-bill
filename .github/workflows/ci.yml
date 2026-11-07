@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-# The job ids (lint, test, vuln, secrets) are the check names that branch
+# The job ids (lint, test, sonar, vuln, secrets) are the check names that branch
 # protection requires. Do not rename them or add a `name:` to a job.
 jobs:
   lint:
@@ -47,11 +47,26 @@ jobs:
         with:
           go-version: stable
       - run: make test test-tz
-      # Task 2 downloads this artifact for SonarQube.
+      # The sonar job downloads this artifact.
       - uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
+
+  sonar:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 gives Sonar the history it uses to find new code.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: coverage
+      - uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   vuln:
     runs-on: ubuntu-latest
