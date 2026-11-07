@@ -1,0 +1,16 @@
+# Config for the working-tree scan (`make secrets`). It extends gitleaks'
+# default rules; it does not replace them.
+title = "ev-bill working-tree scan"
+
+[extend]
+useDefault = true
+
+# `gitleaks dir` does not read .gitignore, so list the generated or ignored
+# paths here, matching .gitignore. The history scan does not use this file.
+[[allowlists]]
+description = "generated or git-ignored files"
+paths = [
+  '''^coverage\.out$''',
+  '''^bin/''',
+  '''^\.superpowers/''',
+]

@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - gosec
+    - staticcheck
+    - forbidigo
+  settings:
+    errcheck:
+      check-blank: true
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^time\.Local$'
+          msg: "BIL-2: use the tariff's Asia/Singapore location"
+        - pattern: '^time\.Time\.Local$'
+          msg: "BIL-2: use the tariff's Asia/Singapore location"
+
+formatters:
+  enable:
+    - gofmt
