@@ -31,11 +31,13 @@ test:
 # -count=1 matters: Go's test cache does not notice a changed TZ, so without it
 # the second run could replay the first run's result and prove nothing.
 # The skip applies only while internal/billing does not exist; once it does,
-# the tests run for real.
+# the tests run for real. internal/web runs whole, not filtered: its time
+# tests (VIEW-4 tariff axis, VIEW-8 clock and year boundary) are spread over
+# many names, and the package takes a few seconds against the test database.
 test-tz:
 	@if [ -d internal/billing ]; then \
-		TZ=UTC go test -count=1 ./internal/billing/... && \
-		TZ=America/New_York go test -count=1 ./internal/billing/...; \
+		TZ=UTC go test -count=1 ./internal/billing/... ./internal/web/... && \
+		TZ=America/New_York go test -count=1 ./internal/billing/... ./internal/web/...; \
 	else \
 		echo "test-tz: skipped, internal/billing does not exist yet"; \
 	fi

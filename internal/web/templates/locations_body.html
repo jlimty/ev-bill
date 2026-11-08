@@ -11,7 +11,7 @@
 {{range .Sites}}<article class="site" data-key="{{.Postal}}">
 <div class="head">
 <div><h2>{{.Name}}</h2><p class="sub">{{.Sub}}</p></div>
-<p class="util" data-watch><span class="pct">{{.Util}}</span>{{if .Observed}}<span class="vh">&nbsp;·&nbsp;</span><span class="label">{{.UtilLabel}}</span>{{end}}</p>
+<p class="util"><span class="pct" data-watch>{{.Util}}</span>{{if .Observed}}<span class="vh">&nbsp;·&nbsp;</span><span class="label">{{.UtilLabel}}</span>{{end}}</p>
 </div>
 <ul class="cells{{if .Muted}} muted{{end}}" aria-hidden="true">
 {{range .Cells}}<li class="cell {{.Class}}" data-key="{{.Key}}" data-watch title="{{.Title}}"></li>

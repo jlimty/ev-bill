@@ -323,7 +323,7 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 		Status:      v.Status,
 		StatusLabel: statusLabel(sess.Source, v.Status),
 		Started:     p.clock(sess.StartedAt, true),
-		Stopped:     "still " + statusLabel(sess.Source, sessions.StatusCharging),
+		Stopped:     p.stoppedText(sess.Source, v.Status),
 		Energy:      estimated(FormatWh(v.Bill.EnergyWh), est),
 		Total:       estimated(FormatCents(v.Bill.TotalCents), est),
 	}
@@ -357,6 +357,15 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 	}
 	data.Axis, data.Ticks = p.axis(v.Bill.Segments)
 	return data, nil
+}
+
+// stoppedText is the Stopped value of a session that has not stopped: "not
+// stopped" when it is stale (SES-4), else "still charging" or "still occupied".
+func (p *Pages) stoppedText(source sessions.Source, status string) string {
+	if status == sessions.StatusStale {
+		return "not stopped"
+	}
+	return "still " + statusLabel(source, sessions.StatusCharging)
 }
 
 // clock formats t in the tariff's location: "HH:MM", or with a date "02 Jan

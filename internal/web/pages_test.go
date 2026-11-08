@@ -701,6 +701,12 @@ func TestRoutes_NAV1_LocationsRedirects(t *testing.T) {
 		if got := rec.Header().Get("Location"); got != "/" {
 			t.Errorf("NAV-1: %s %s Location = %q, want /", c.method, c.path, got)
 		}
+		if got := rec.Header().Get("Content-Security-Policy"); got == "" {
+			t.Errorf("NAV-1: %s %s has no Content-Security-Policy", c.method, c.path)
+		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("NAV-1: %s %s X-Content-Type-Options = %q, want nosniff", c.method, c.path, got)
+		}
 	}
 }
 
@@ -1229,6 +1235,20 @@ func TestDetail_VIEW4_Summary(t *testing.T) {
 	wantContains(t, done, `<p class="summary" data-watch>18.0 kWh · $9.98 · 2 h 35 min · completed</p>`, "<dt>Stopped</dt><dd>07 Nov 00:15</dd>")
 	if strings.Contains(done, "still ") || strings.Contains(done, " est.") {
 		t.Errorf("VIEW-4: stopped api session shows still or est.")
+	}
+}
+
+// VIEW-4, SES-4: a stale session carries the stale badge, so its Stopped line
+// reads "not stopped", not "still charging".
+func TestDetail_VIEW4_StaleStoppedText(t *testing.T) {
+	e := newEnv(t)
+	id := e.start("CP-S", sgt(12, 0, 6))
+	e.reading(id, sgt(12, 10, 6), 8333)
+	e.p.Now = func() time.Time { return sgt(12, 40, 6) } // 30 min without a reading
+	body := e.get("/sessions/" + id).Body.String()
+	wantContains(t, body, "<dt>Stopped</dt><dd>not stopped</dd>", "stale")
+	if strings.Contains(body, "still charging") {
+		t.Error("VIEW-4: a stale session still reads still charging")
 	}
 }
 

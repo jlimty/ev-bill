@@ -39,22 +39,36 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 33 | 2026-11-08 | Locations Task 3 / LOC-3 | The local test database's Postgres TimeZone defaults to Asia/Singapore, which hid a missing `AT TIME ZONE` in the hour bucketing | implementer's own mutation testing | The LOC-3 test sets the session TimeZone to UTC and America/New_York itself | Test |
 | 34 | 2026-11-08 | CI / `secrets`, `sbom` | The first version of the release-tarball cache only rejected a cached tarball that failed its sha256 check, so one corrupt entry would have failed the blocking `secrets` job on every run until someone deleted it by hand | review | A check step verifies a cached tarball, and a failure falls back to the download; the install step checks again | None: shown once in CI by corrupting the restored tarball on purpose; workflow steps have no test harness |
 | 35 | 2026-11-08 | CI / process | While removing two temporary CI test commits, reverting the second one also undid its revert of the first, and the test keys and 404 URLs were pushed back to the PR branch. The command printed the leftover diff but did not stop on it | implementer's own report | Restored `ci.yml` from the real commit and cancelled the run | None: the check is now `git diff --quiet` against the real commit, which fails on any difference |
+| 36 | 2026-11-08 | Locations Task 2 / NAV-3 | The test meant to prove the SQL energy equals the billed energy checked only the order, so it still passed with `- s.meter_start_wh` removed | review (manual mutation) | Each billed energy is used as an After cursor, with distinct start meters | Test, shown failing with the subtraction removed |
+| 37 | 2026-11-08 | Locations Task 2 / VIEW-5 | The "newest observation" clause of SiteName was untested; removing it left the test green | review (manual mutation) | The test seeds older rows with a different majority name | Test |
+| 38 | 2026-11-08 | Locations Task 2 / DRY | The session-list select list and row scan were copied word for word from ListRecent | review | ListRecent reuses `listSelectSQL` and `scanListRow` | None: duplication, no behaviour to pin |
+| 39 | 2026-11-08 | Locations Task 3 / NAV-2 | The site scope was a paragraph, not the page heading, so heading navigation and the h1 focus fallback missed it | review | The h1 reads "Sessions at {site}" | Test |
+| 40 | 2026-11-08 | Locations Task 4 / VIEW-4 | Tariff-axis pieces had padding and a border under border-box, so pieces under about 18 px rendered wider than their width, ticks drifted about 16 px and the bar's end was clipped at 320 and 1024 px | review (browser measurement) | No padding or border on pieces; label padding on an inner span; an inset box-shadow as the separator | e2e test that ticks align with piece edges within 1 px at 320 px |
+| 41 | 2026-11-08 | Locations Task 6 / VIEW-6 | The rule that a class change counts as a change (Locations cells have no text) was untested; a text-only mutation left every test green | review (manual mutation) | An e2e test asserts the changed cell flashes and unchanged cells do not | Test, shown failing under the mutation |
+| 42 | 2026-11-08 | Locations Task 6 / VIEW-6 | Focus on an unkeyed link in a live region (the Locations empty state's "See sessions →") moved to the new card's link when one site appeared, because the focusable count stayed equal | review (browser reproduction) | An unkeyed element is restored only to one with the same tag and href, else the h1 | e2e test |
+| 43 | 2026-11-08 | Locations Task 6 / VIEW-6 | The first scroll-anchoring fix scrolled the page by itself at scrollY 0 when content above the cards grew, pushing the h1 out of view | review (browser measurement) | Anchor on an unfocused item only when the region has scrolled above the viewport; scroll only when the position changes | e2e test with the page at the top |
+| 44 | 2026-11-08 | Locations plan / VIEW-8, VIEW-4 | The plan said the year-boundary and tariff-boundary web tests must pass under `make test-tz`, but that target ran only internal/billing, so the gate never ran them under other timezones | review | `make test-tz` also runs ./internal/web/... under TZ=UTC and TZ=America/New_York | The gate itself, shown failing when `(*Pages).clock` used `time.Local` |
+| 45 | 2026-11-08 | Locations final / VIEW-7 | Several links had tap targets under 44 px on phones: the card link "All sessions at this site →" (38.8 px), "← All sessions", "Show all sites", "See sessions →" and "Back to the first page" (17 to 42 px) | review (browser measurement) | Phone media query gives those links min-height 44 px | e2e test measures each link at 320 and 375 px, shown failing without the CSS |
+| 46 | 2026-11-08 | Locations final / VIEW-6 | `data-watch` sat on the whole utilization line, which includes "{H} h avg · observed"; H rises every hour, so each card flashed hourly with no real change | review | `data-watch` moved to the percentage only | Test |
+| 47 | 2026-11-08 | Locations final / VIEW-4, SES-4 | A stale session showed a stale badge next to "Stopped: still charging" | review | A stale session's Stopped line reads "not stopped"; the spec copy table says so | Test |
+| 48 | 2026-11-08 | Locations final / NAV-1 | The /locations redirect did not set the security headers the CSP comment says every response gets | review | `locationsRedirect` calls `setSecurityHeaders` first | Test checks CSP and nosniff on the redirect |
 
 ## Tally
 
-Rows counted by the "Caught by" column (35 rows):
+Rows counted by the "Caught by" column (48 rows):
 
 | Caught by | Rows | Count |
 |---|---|---|
-| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 26, 27, 28, 31, 32, 34 | 22 |
-| review (manual mutation) | 7, 12, 13, 16, 23 | 5 |
+| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 26, 27, 28, 31, 32, 34, 38, 39, 44, 46, 47, 48 | 28 |
+| review (manual mutation) | 7, 12, 13, 16, 23, 36, 37, 41 | 8 |
+| review (browser measurement or reproduction) | 40, 42, 43, 45 | 4 |
 | sonar | 4, 8, 19, 20 | 4 |
 | scan (pre-flight scan of the plan) | 29 | 1 |
 | implementer's own report | 30, 35 | 2 |
 | implementer's own mutation testing | 33 | 1 |
 | test, lint, mutation | none | 0 |
 
-Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32, 33), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30, 34, 35). Rows 3, 14, 17, 29, 30, 34 and 35 are "none" decisions; 14, 17, 29, 30, 34 and 35 give a reason or note, 3 does not.
+Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32, 33, 36, 37, 39, 40, 41, 42, 43, 45, 46, 47, 48), a gate change shown failing (44), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30, 34, 35, 38). Rows 3, 14, 17, 29, 30, 34, 35 and 38 are "none" decisions; 14, 17, 29, 30, 34, 35 and 38 give a reason or note, 3 does not.
 
 ## Mutation baseline
 

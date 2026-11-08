@@ -980,6 +980,7 @@ func TestPages_VIEW3_VIEW7_FitsPhones(t *testing.T) {
 		{"/", ""},
 		{"/sessions", `.sessions tbody tr[data-key] td.cost`},
 		{"/sessions/" + id, `.billing td.cost`},
+		{"/sessions?site=821208", ""},
 	}
 	for _, width := range []int{320, 375, 1024} {
 		must(t, "viewport", page.SetViewportSize(width, 800))
@@ -1015,8 +1016,15 @@ func TestPages_VIEW3_VIEW7_FitsPhones(t *testing.T) {
 				continue
 			}
 			targets := []string{`nav[aria-label="Pages"] a`}
-			if pg.path == "/sessions" {
+			switch {
+			case pg.path == "/":
+				targets = append(targets, `.more a`)
+			case pg.path == "/sessions":
 				targets = append(targets, `.sessions tbody tr[data-key]`, `.sessions thead a`, `.pager a`)
+			case strings.HasPrefix(pg.path, "/sessions/"):
+				targets = append(targets, `.back a`)
+			case strings.HasPrefix(pg.path, "/sessions?site="):
+				targets = append(targets, `.scope a`)
 			}
 			for _, sel := range targets {
 				found := boxes(t, page, sel)
@@ -1026,6 +1034,15 @@ func TestPages_VIEW3_VIEW7_FitsPhones(t *testing.T) {
 				for i, b := range found {
 					if b.height < 44 {
 						t.Errorf("VIEW-7: %s: %s #%d is %.1f px tall, want at least 44", where, sel, i, b.height)
+					}
+				}
+			}
+			if pg.path == "/sessions" { // a cursor page offers "Back to the first page"
+				must(t, "open the next page", page.Locator(`.pager a[rel="next"]`).Click())
+				must(t, "cursor page loaded", expect.Locator(page.Locator(".feed a")).ToBeVisible())
+				for i, b := range boxes(t, page, ".feed a") {
+					if b.height < 44 {
+						t.Errorf("VIEW-7: %s cursor page: .feed a #%d is %.1f px tall, want at least 44", where, i, b.height)
 					}
 				}
 			}
@@ -1318,4 +1335,23 @@ func TestLive_VIEW6_PageAtTopStaysAtTop(t *testing.T) {
 		t.Errorf("VIEW-6: scrollY = %v after content above the cards grew, want 0", y)
 	}
 	must(t, "VIEW-6: h1 still in view", expect.Locator(page.Locator("h1")).ToBeInViewport())
+}
+
+// TestPages_VIEW7_EmptyLocationsLinkIsTappable: on a phone the "See sessions"
+// link in the Locations empty state is at least 44 px tall.
+func TestPages_VIEW7_EmptyLocationsLinkIsTappable(t *testing.T) {
+	st := store.New(testdb.New(t))
+	srv, _ := startServer(t, st)
+	page, expect := openBrowser(t)
+	must(t, "viewport", page.SetViewportSize(375, 800))
+	_, err := page.Goto(srv.URL + "/")
+	must(t, "open /", err)
+	must(t, "empty state shown", expect.Locator(page.Locator(".empty a")).ToBeVisible())
+	found := boxes(t, page, ".empty a")
+	if len(found) == 0 {
+		t.Fatal("VIEW-7: no .empty a")
+	}
+	if found[0].height < 44 {
+		t.Errorf("VIEW-7: .empty a is %.1f px tall, want at least 44", found[0].height)
+	}
 }
