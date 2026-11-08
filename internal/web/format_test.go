@@ -13,7 +13,7 @@ func TestFormatCents(t *testing.T) {
 	cases := []struct {
 		in   int64
 		want string
-	}{{998, "$9.98"}, {5, "$0.05"}, {0, "$0.00"}, {100000, "$1000.00"}}
+	}{{998, "$9.98"}, {5, "$0.05"}, {0, "$0.00"}, {100000, "$1,000.00"}}
 	for _, c := range cases {
 		if got := FormatCents(c.in); got != c.want {
 			t.Errorf("FormatCents(%d) = %q, want %q", c.in, got, c.want)
@@ -98,6 +98,32 @@ func TestFormatAgo(t *testing.T) {
 	for _, c := range cases {
 		if got := FormatAgo(c.in); got != c.want {
 			t.Errorf("FormatAgo(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// VIEW-8: money shows thousands separators.
+func TestFormatCents_VIEW8(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want string
+	}{{99999, "$999.99"}, {100000, "$1,000.00"}, {100000000, "$1,000,000.00"}, {0, "$0.00"}}
+	for _, c := range cases {
+		if got := FormatCents(c.in); got != c.want {
+			t.Errorf("FormatCents(%d) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// VIEW-8: energy shows thousands separators.
+func TestFormatWh_VIEW8(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want string
+	}{{999_000, "999.0 kWh"}, {1_000_000, "1,000.0 kWh"}, {1_905_200, "1,905.2 kWh"}}
+	for _, c := range cases {
+		if got := FormatWh(c.in); got != c.want {
+			t.Errorf("FormatWh(%d) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

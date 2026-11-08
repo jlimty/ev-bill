@@ -591,7 +591,7 @@ func TestEvents_LIVE1_NotCutByDeadlines(t *testing.T) {
 	if _, err := tx.Exec(ctx, "LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE"); err != nil {
 		t.Fatalf("lock sessions: %v", err)
 	}
-	for _, path := range []string{"/api/sessions", "/"} {
+	for _, path := range []string{"/api/sessions", "/sessions"} {
 		start := time.Now()
 		r, err := http.Get(srv.URL + path)
 		if err != nil {

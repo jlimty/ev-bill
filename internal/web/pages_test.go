@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -110,22 +111,22 @@ func badge(status string) string {
 	return `<span class="badge ` + status + `">` + status + `</span>`
 }
 
-// refreshMeta is the no-JS fallback: a 3 s refresh only for browsers without
+// refreshMeta is the no-JS fallback: a 30 s refresh only for browsers without
 // scripts, since live.js updates the page for the rest (LIVE-3).
-const refreshMeta = `<noscript><meta http-equiv="refresh" content="3"></noscript>`
+const refreshMeta = `<noscript><meta http-equiv="refresh" content="30"></noscript>`
 
-// UI-1: newest first, status text, energy and cost, links, 3 s refresh.
+// UI-1: newest first, status text, energy and cost, links, 30 s refresh.
 func TestListPage_UI1(t *testing.T) {
 	e := newEnv(t)
 	e.mockup("CP-OLD")
 	newID := e.start("CP-NEW", sgt(0, 15, 7))
 	e.reading(newID, sgt(0, 18, 7), 1000)
 
-	rec := e.get("/")
+	rec := e.get("/sessions")
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
 	wantContains(t, body, refreshMeta, badge("completed"), badge("charging"), "$9.98", "18.0 kWh", "1.0 kWh",
-		"06 Nov 2026 21:40", "07 Nov 2026 00:15", `href="/sessions/`+newID+`"`)
+		"06 Nov 21:40", "07 Nov 00:15", `href="/sessions/`+newID+`"`)
 	if strings.Index(body, "CP-NEW") > strings.Index(body, "CP-OLD") || !strings.Contains(body, "CP-NEW") {
 		t.Errorf("CP-NEW must appear before CP-OLD")
 	}
@@ -133,7 +134,7 @@ func TestListPage_UI1(t *testing.T) {
 
 // UI-1: an empty list is a friendly message, not an empty table.
 func TestListPage_UI1_Empty(t *testing.T) {
-	rec := newEnv(t).get("/")
+	rec := newEnv(t).get("/sessions")
 	wantHTML(t, rec, http.StatusOK)
 	wantContains(t, rec.Body.String(), "No sessions yet", refreshMeta)
 }
@@ -145,7 +146,7 @@ func TestDetailPage_UI2_MockupSession(t *testing.T) {
 	rec := e.get("/sessions/" + id)
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	wantContains(t, body, "CP-01", badge("completed"), "06 Nov 2026 21:40", "07 Nov 2026 00:15", "Peak", "Off-peak", "21:40", "23:00", "00:15",
+	wantContains(t, body, "CP-01", badge("completed"), "06 Nov 21:40", "07 Nov 00:15", "Peak", "Off-peak", "21:40", "23:00", "00:15",
 		"$5.95", "$4.03", "$9.98", "9.6 kWh", "8.4 kWh", "18.0 kWh", "62", "48",
 		`style="width: 51.6%"`, `style="width: 48.4%"`)
 	if strings.Count(body, `class="seg `) != 2 {
@@ -200,7 +201,7 @@ func TestPages_StoreFailureIs500(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-01", sgt(0, 15, 7))
 	e.pool.Close()
-	for _, path := range []string{"/", "/sessions/" + id} {
+	for _, path := range []string{"/sessions", "/sessions/" + id} {
 		rec := e.get(path)
 		wantHTML(t, rec, http.StatusInternalServerError)
 		body := rec.Body.String()
@@ -233,7 +234,7 @@ func TestPages_SecurityHeaders(t *testing.T) {
 	e := newEnv(t)
 	id := e.mockup("CP-01")
 	const wantCSP = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'"
-	for _, path := range []string{"/", "/sessions/" + id, "/sessions/not-a-uuid"} {
+	for _, path := range []string{"/sessions", "/", "/sessions/" + id, "/sessions/not-a-uuid"} {
 		rec := e.get(path)
 		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 			t.Errorf("%s: X-Content-Type-Options = %q", path, got)
@@ -243,7 +244,7 @@ func TestPages_SecurityHeaders(t *testing.T) {
 		}
 	}
 	e.pool.Close()
-	rec := e.get("/")
+	rec := e.get("/sessions")
 	wantHTML(t, rec, http.StatusInternalServerError)
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Content-Security-Policy") != wantCSP {
 		t.Errorf("500 page lacks the security headers: %v", rec.Header())
@@ -258,7 +259,7 @@ func TestPages_NeedNoScriptOrExternalResources(t *testing.T) {
 	done := e.mockup("CP-01")
 	active := e.start("CP-02", sgt(0, 15, 7))
 	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Unavailable)}, samplesBack("100001", 3, 1, 1, 1))
-	for path, live := range map[string]bool{"/": true, "/locations": true, "/sessions/" + active: true, "/sessions/" + done: false, "/sessions/not-a-uuid": false} {
+	for path, live := range map[string]bool{"/": true, "/sessions": true, "/sessions/" + active: true, "/sessions/" + done: false, "/sessions/not-a-uuid": false} {
 		body := strings.ToLower(e.get(path).Body.String())
 		rest := strings.Replace(body, strings.ToLower(liveScript), "", 1)
 		if live != (rest != body) {
@@ -282,7 +283,7 @@ func TestDetailPage_UI2_SameDayTimesHaveNoDate(t *testing.T) {
 	}
 	body := e.get("/sessions/" + id).Body.String()
 	wantContains(t, body, "10:00 – 12:00")
-	if strings.Contains(body, "06 Nov 10:00") {
+	if strings.Contains(body, "06 Nov 10:00 –") {
 		t.Errorf("same-day segment shows a date: %s", body)
 	}
 }
@@ -293,7 +294,7 @@ func TestDetailPage_UI2_MockupSegmentsStayShort(t *testing.T) {
 	id := e.mockup("CP-01")
 	body := e.get("/sessions/" + id).Body.String()
 	wantContains(t, body, "21:40 – 23:00", "23:00 – 00:15")
-	if strings.Contains(body, "06 Nov 21:40") || strings.Contains(body, "06 Nov 23:00") {
+	if strings.Contains(body, "06 Nov 21:40 –") || strings.Contains(body, "06 Nov 23:00") {
 		t.Errorf("segment rows show a date: %s", body)
 	}
 }
@@ -308,7 +309,7 @@ func TestDetailPage_UI2_JustUnder24hStaysShort(t *testing.T) {
 	}
 	body := e.get("/sessions/" + id).Body.String()
 	wantContains(t, body, "07:00 – 23:00", "23:00 – 06:59")
-	if strings.Contains(body, "06 Nov 07:00") {
+	if strings.Contains(body, "06 Nov 07:00 –") {
 		t.Errorf("under-24h segment shows a date: %s", body)
 	}
 }
@@ -400,7 +401,7 @@ func TestList_LIVE4_Content(t *testing.T) {
 	e.mirrorSession("SG-AC-1", sgt(0, 0, 7), sgt(0, 10, 7), 1233) // off-peak: 1233 Wh x 48 = 59.18 -> 59 cents
 	e.mirrorSession("SG-DC-1", sgt(0, 5, 7), sgt(0, 15, 7), 8333) // off-peak: 8333 Wh x 48 = 399.98 -> 400 cents
 
-	rec := e.get("/")
+	rec := e.get("/sessions")
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
 	wantContains(t, body, tariffText, noticeHTML, attribution,
@@ -441,7 +442,7 @@ func TestList_LIVE4_FeedLine(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
 			e.p.Feed = tc.feed
-			wantContains(t, e.get("/").Body.String(), tc.want)
+			wantContains(t, e.get("/sessions").Body.String(), tc.want)
 		})
 	}
 }
@@ -453,7 +454,7 @@ func TestList_LIVE4_FeedLineUnavailable(t *testing.T) {
 	e := newEnv(t)
 	const cause = "datamall: GET https://example.test/ltaodataservice/EVCBatch: status 401"
 	e.p.Feed = feedState(live.FeedState{Enabled: true, LastError: cause})
-	body := e.get("/").Body.String()
+	body := e.get("/sessions").Body.String()
 	wantContains(t, body, `<p class="feed warn">Live feed unavailable · no successful update yet</p>`)
 	if strings.Contains(body, "Waiting for the first live update") || strings.Contains(body, "status 401") || strings.Contains(body, "example.test") {
 		t.Errorf("LIVE-4: unavailable feed shows waiting or the error text: %s", body)
@@ -462,7 +463,7 @@ func TestList_LIVE4_FeedLineUnavailable(t *testing.T) {
 	// Once a poll has succeeded, a later failure leaves the line on the last
 	// good update; it turns into a warning only when that is over 15 min old.
 	e.p.Feed = feedState(live.FeedState{Enabled: true, LastGood: fixedNow().Add(-2 * time.Minute), LastError: cause})
-	wantContains(t, e.get("/").Body.String(), `<p class="feed">Live from LTA DataMall · last update 00:18 (2 min ago)</p>`)
+	wantContains(t, e.get("/sessions").Body.String(), `<p class="feed">Live from LTA DataMall · last update 00:18 (2 min ago)</p>`)
 }
 
 // LIVE-4, MIR-12: connectors held after a 48 h stop are counted at the end of
@@ -471,14 +472,14 @@ func TestList_LIVE4_FeedLineHeld(t *testing.T) {
 	e := newEnv(t)
 	e.p.Feed = feedState(live.FeedState{Enabled: true, LastGood: fixedNow().Add(-2 * time.Minute)})
 	e.charger("SG-1", "Test Mall", "Testco", "AC", 7_400, true, sgt(0, 18, 7))
-	wantContains(t, e.get("/").Body.String(),
+	wantContains(t, e.get("/sessions").Body.String(),
 		"Live from LTA DataMall · last update 00:18 (2 min ago) · 1 connector occupied over 48 h, not billed</p>")
 	e.charger("SG-2", "Test Mall", "Testco", "AC", 7_400, true, sgt(0, 18, 7))
-	wantContains(t, e.get("/").Body.String(),
+	wantContains(t, e.get("/sessions").Body.String(),
 		"Live from LTA DataMall · last update 00:18 (2 min ago) · 2 connectors occupied over 48 h, not billed</p>")
 
 	e.p.Feed = feedState(live.FeedState{})
-	if body := e.get("/").Body.String(); strings.Contains(body, "occupied over 48 h") {
+	if body := e.get("/sessions").Body.String(); strings.Contains(body, "occupied over 48 h") {
 		t.Errorf("LIVE-4: mirror off, yet the line counts held connectors: %s", body)
 	}
 }
@@ -511,7 +512,7 @@ func TestList_LIVE4_HeldCountFailureIs500(t *testing.T) {
 	e := newEnv(t)
 	e.p.Feed = feedState(live.FeedState{Enabled: true})
 	e.pool.Close()
-	rec := e.get("/")
+	rec := e.get("/sessions")
 	wantHTML(t, rec, http.StatusInternalServerError)
 	if !strings.Contains(e.logs.String(), "held count") {
 		t.Errorf("cause not logged: %q", e.logs.String())
@@ -523,7 +524,7 @@ func TestList_LIVE4_HeldCountFailureIs500(t *testing.T) {
 // element live.js swaps is present even when the list is empty.
 func TestList_LIVE3_CSPAndScript(t *testing.T) {
 	e := newEnv(t)
-	rec := e.get("/")
+	rec := e.get("/sessions")
 	wantHTML(t, rec, http.StatusOK)
 	const wantCSP = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'"
 	if got := rec.Header().Get("Content-Security-Policy"); got != wantCSP {
@@ -613,7 +614,7 @@ func TestPages_LIVE4_ChargerDetailsOnlyForMirror(t *testing.T) {
 	e.charger("SG-REAL-1", "Test Mall", "Testco", "AC", 7_400, false, sgt(0, 18, 7))
 	id := e.start("SG-REAL-1", sgt(0, 15, 7))
 
-	list := e.get("/").Body.String()
+	list := e.get("/sessions").Body.String()
 	wantContains(t, list, `>SG-REAL-1</a> <span class="source simulated">simulated</span>`)
 	detail := e.get("/sessions/" + id).Body.String()
 	wantContains(t, detail, `<span class="source simulated">simulated</span>`)
@@ -640,5 +641,132 @@ func TestDetail_LIVE4_BarLegend(t *testing.T) {
 	active := e.start("CP-02", sgt(0, 15, 7))
 	if body := e.get("/sessions/" + active).Body.String(); strings.Contains(body, `class="legend"`) {
 		t.Errorf("LIVE-4: legend shown without a bar")
+	}
+}
+
+// navOf returns the text of the header link marked aria-current, or "".
+func navOf(t *testing.T, body string) string {
+	t.Helper()
+	m := regexp.MustCompile(`<a href="[^"]*" aria-current="page">([^<]*)</a>`).FindAllStringSubmatch(body, -1)
+	if len(m) > 1 {
+		t.Fatalf("%d links marked aria-current: %s", len(m), body)
+	}
+	if len(m) == 0 {
+		return ""
+	}
+	return m[0][1]
+}
+
+// NAV-1: Locations is the home page, first in the nav and marked current.
+func TestRoutes_NAV1_HomeIsLocations(t *testing.T) {
+	e := newEnv(t)
+	rec := e.get("/")
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	wantContains(t, body, "<h1>Locations</h1>",
+		`<nav aria-label="Pages"><a href="/" aria-current="page">Locations</a> · <a href="/sessions">Sessions</a></nav>`)
+	if got := navOf(t, body); got != "Locations" {
+		t.Errorf("NAV-1: current = %q, want Locations", got)
+	}
+}
+
+// NAV-1: the sessions list is at /sessions and marks Sessions.
+func TestRoutes_NAV1_SessionsList(t *testing.T) {
+	e := newEnv(t)
+	e.mockup("CP-01")
+	rec := e.get("/sessions")
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	wantContains(t, body, "<h1>Charging sessions</h1>", "CP-01")
+	if got := navOf(t, body); got != "Sessions" {
+		t.Errorf("NAV-1: current = %q, want Sessions", got)
+	}
+}
+
+// NAV-1: /locations answers 301 to / for GET (with or without a query) and HEAD.
+func TestRoutes_NAV1_LocationsRedirects(t *testing.T) {
+	e := newEnv(t)
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/locations"}, {http.MethodGet, "/locations?x=1"}, {http.MethodHead, "/locations"},
+	} {
+		rec := httptest.NewRecorder()
+		e.mux.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("NAV-1: %s %s = %d, want 301", c.method, c.path, rec.Code)
+		}
+		if got := rec.Header().Get("Location"); got != "/" {
+			t.Errorf("NAV-1: %s %s Location = %q, want /", c.method, c.path, got)
+		}
+	}
+}
+
+// NAV-1: the detail page and its errors mark Sessions and link back to /sessions.
+func TestRoutes_NAV1_CurrentOnDetailAndErrors(t *testing.T) {
+	e := newEnv(t)
+	id := e.mockup("CP-01")
+	detail := e.get("/sessions/" + id).Body.String()
+	wantContains(t, detail, `<a href="/sessions">&larr; All sessions</a>`)
+	notFound := e.get("/sessions/not-a-uuid")
+	wantHTML(t, notFound, http.StatusNotFound)
+	wantContains(t, notFound.Body.String(), `<a href="/sessions">Back to all sessions</a>`)
+	for name, body := range map[string]string{"detail": detail, "404": notFound.Body.String()} {
+		if got := navOf(t, body); got != "Sessions" {
+			t.Errorf("NAV-1: %s current = %q, want Sessions", name, got)
+		}
+	}
+
+	// A failure on a /sessions page marks Sessions; on the home page, nothing.
+	e.pool.Close()
+	if got := navOf(t, e.get("/sessions").Body.String()); got != "Sessions" {
+		t.Errorf("NAV-1: sessions 500 current = %q, want Sessions", got)
+	}
+	if got := navOf(t, e.get("/sessions/"+id).Body.String()); got != "Sessions" {
+		t.Errorf("NAV-1: detail 500 current = %q, want Sessions", got)
+	}
+	if got := navOf(t, e.get("/").Body.String()); got != "" {
+		t.Errorf("NAV-1: home 500 current = %q, want none", got)
+	}
+}
+
+// VIEW-7: the first link in the body skips to <main id="content">.
+func TestLayout_VIEW7_SkipLink(t *testing.T) {
+	e := newEnv(t)
+	for _, path := range []string{"/", "/sessions", "/sessions/not-a-uuid"} {
+		body := e.get(path).Body.String()
+		after := body[strings.Index(body, "<body"):]
+		i := strings.Index(after, "<a")
+		if i < 0 || !strings.HasPrefix(after[i:], `<a class="skip" href="#content">Skip to content</a>`) {
+			t.Errorf("VIEW-7: %s: first link in body is not the skip link: %.200s", path, after[i:])
+		}
+		wantContains(t, body, `<main id="content">`)
+	}
+}
+
+// LIVE-3, VIEW-6: the no-script refresh is 30 s on a streaming page.
+func TestLayout_LIVE3_NoscriptIs30s(t *testing.T) {
+	e := newEnv(t)
+	wantContains(t, e.get("/").Body.String(), `<noscript><meta http-equiv="refresh" content="30"></noscript>`)
+}
+
+// VIEW-8: a date shows its year only outside the current year in the tariff's
+// zone; "now" is read in that zone too, so the last case holds under any TZ.
+func TestClock_VIEW8_YearOnlyOutsideCurrentYear(t *testing.T) {
+	loc := billing.SingaporeTariff().Location
+	cases := []struct {
+		name string
+		now  time.Time
+		t    time.Time
+		want string
+	}{
+		{"same year", time.Date(2026, 11, 7, 0, 0, 0, 0, loc), time.Date(2026, 11, 6, 21, 40, 0, 0, loc), "06 Nov 21:40"},
+		{"earlier year", time.Date(2026, 11, 7, 0, 0, 0, 0, loc), time.Date(2025, 12, 31, 23, 59, 0, 0, loc), "31 Dec 2025 23:59"},
+		{"new year in SGT, still old year in UTC", time.Date(2027, 1, 1, 0, 10, 0, 0, loc), time.Date(2026, 12, 31, 23, 50, 0, 0, loc), "31 Dec 2026 23:50"},
+		{"now given in UTC", time.Date(2026, 12, 31, 16, 10, 0, 0, time.UTC), time.Date(2026, 12, 31, 23, 50, 0, 0, loc), "31 Dec 2026 23:50"},
+	}
+	for _, c := range cases {
+		p := &Pages{Tariff: billing.SingaporeTariff(), Now: func() time.Time { return c.now }}
+		if got := p.clock(c.t, true); got != c.want {
+			t.Errorf("VIEW-8: %s: clock = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

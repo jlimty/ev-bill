@@ -1,4 +1,4 @@
-{{define "locations_body"}}{{if .Empty.Text}}<p class="empty{{if .Empty.Warn}} warn{{end}}">{{.Empty.Text}}</p>
+{{define "locations_body"}}{{if .Empty.Text}}<p class="empty{{if .Empty.Warn}} warn{{end}}">{{.Empty.Text}}. <a href="/sessions">See sessions →</a></p>
 {{else}}{{with .Window}}<p class="window">{{.}}</p>
 {{end}}<p class="feed{{if .Feed.Warn}} warn{{end}}">{{.Feed.Text}}</p>
 <p class="headline">{{.Headline}}</p>

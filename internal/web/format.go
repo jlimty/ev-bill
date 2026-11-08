@@ -3,22 +3,39 @@ package web
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jlimty/ev-bill/internal/billing"
 )
 
-// FormatCents formats integer cents as dollars, e.g. 998 -> "$9.98" (BIL-5).
+// FormatCents formats integer cents as dollars with thousands separators,
+// e.g. 998 -> "$9.98" and 118124 -> "$1,181.24" (BIL-5, VIEW-8).
 // Negative input is not expected (bills are never negative) and is not handled.
 func FormatCents(c int64) string {
-	return fmt.Sprintf("$%d.%02d", c/100, c%100)
+	return fmt.Sprintf("$%s.%02d", groupThousands(c/100), c%100)
+}
+
+// groupThousands writes n with a comma between each group of three digits
+// (VIEW-8): 1905 -> "1,905". Negative input is not expected.
+func groupThousands(n int64) string {
+	digits := strconv.FormatInt(n, 10)
+	out := make([]byte, 0, len(digits)+len(digits)/3)
+	for i := range len(digits) {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, digits[i])
+	}
+	return string(out)
 }
 
 // FormatWh formats watt-hours as kWh with one decimal, rounded half-up, using
-// integers only (BIL-1): 9650 -> "9.7 kWh". Negative input is not expected.
+// integers only (BIL-1), with thousands separators (VIEW-8): 9650 -> "9.7 kWh",
+// 1905200 -> "1,905.2 kWh". Negative input is not expected.
 func FormatWh(wh int64) string {
 	tenths := (wh + 50) / 100
-	return fmt.Sprintf("%d.%d kWh", tenths/10, tenths%10)
+	return fmt.Sprintf("%s.%d kWh", groupThousands(tenths/10), tenths%10)
 }
 
 // BarWidths returns each segment's share of the total duration as a percentage
