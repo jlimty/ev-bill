@@ -1,0 +1,309 @@
+openapi: 3.0.3
+info:
+  title: EV Billing API
+  version: 1.0.0
+  description: >-
+    Bills EV charging sessions on a peak/off-peak tariff (Asia/Singapore).
+    This file is the contract (API-3); handler tests validate real responses against it.
+paths:
+  /api/sessions:
+    post:
+      operationId: startSession
+      summary: Start a charging session.
+      description: SES-1. Requires X-API-Key (API-1). Errors use the Error body (API-2).
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartRequest'
+      responses:
+        '201':
+          $ref: '#/components/responses/SessionResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+    get:
+      operationId: listSessions
+      summary: List the newest 50 sessions.
+      description: API table, GET /api/sessions. Public (API-1).
+      responses:
+        '200':
+          description: The newest 50 sessions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionList'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/sessions/{id}/meter-values:
+    post:
+      operationId: addMeterValue
+      summary: Record a meter reading for a session.
+      description: >-
+        SES-2. Requires X-API-Key (API-1). Returns 201 for a new reading and
+        200 when the same reading was already recorded (duplicate).
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeterValueRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/SessionResponse'
+        '201':
+          $ref: '#/components/responses/SessionResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/sessions/{id}/stop:
+    post:
+      operationId: stopSession
+      summary: Stop a session and return its cost breakdown.
+      description: SES-3. Requires X-API-Key (API-1).
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StopRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/SessionResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/sessions/{id}:
+    get:
+      operationId: getSession
+      summary: Get one session with its segments.
+      description: >-
+        API table, GET /api/sessions/{id}; an active session shows its running
+        cost (BIL-7). Public (API-1). A malformed id returns 404 like an unknown one.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          $ref: '#/components/responses/SessionResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Report whether the database is reachable.
+      description: OPS-2. 200 if a database ping succeeds within 2 s, else 503. No authentication.
+      responses:
+        '200':
+          description: Database ping succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: Database ping failed or timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      description: Session id. Plain string so a malformed id reaches the handler and gets a 404.
+      schema:
+        type: string
+  responses:
+    SessionResponse:
+      description: The session.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Session'
+    ErrorResponse:
+      description: Error (API-2).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    StartRequest:
+      type: object
+      additionalProperties: false
+      required: [charger_id, started_at, meter_start_wh]
+      properties:
+        charger_id:
+          $ref: '#/components/schemas/ChargerId'
+        started_at:
+          type: string
+          format: date-time
+        meter_start_wh:
+          $ref: '#/components/schemas/MeterWh'
+    MeterValueRequest:
+      type: object
+      additionalProperties: false
+      required: [timestamp, meter_wh]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        meter_wh:
+          $ref: '#/components/schemas/MeterWh'
+    StopRequest:
+      type: object
+      additionalProperties: false
+      required: [stopped_at, meter_stop_wh]
+      properties:
+        stopped_at:
+          type: string
+          format: date-time
+        meter_stop_wh:
+          $ref: '#/components/schemas/MeterWh'
+    ChargerId:
+      type: string
+      pattern: '^[A-Z0-9-]{1,32}$'
+    MeterWh:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 1000000000000000
+    NonNegativeInt64:
+      type: integer
+      format: int64
+      minimum: 0
+    Session:
+      type: object
+      additionalProperties: false
+      required: [id, charger_id, status, started_at, stopped_at, energy_wh, total_cents, segments]
+      properties:
+        id:
+          type: string
+          format: uuid
+        charger_id:
+          $ref: '#/components/schemas/ChargerId'
+        status:
+          type: string
+          enum: [charging, stale, completed]
+        started_at:
+          type: string
+          format: date-time
+        stopped_at:
+          type: string
+          format: date-time
+          nullable: true
+        energy_wh:
+          $ref: '#/components/schemas/NonNegativeInt64'
+        total_cents:
+          $ref: '#/components/schemas/NonNegativeInt64'
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Segment'
+    Segment:
+      type: object
+      additionalProperties: false
+      required: [window, start, end, energy_wh, rate_cents_per_kwh, cost_cents]
+      properties:
+        window:
+          type: string
+          enum: [peak, off-peak]
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        energy_wh:
+          $ref: '#/components/schemas/NonNegativeInt64'
+        rate_cents_per_kwh:
+          $ref: '#/components/schemas/NonNegativeInt64'
+        cost_cents:
+          $ref: '#/components/schemas/NonNegativeInt64'
+    SessionList:
+      type: object
+      additionalProperties: false
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/Session'
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - bad_json
+                - unauthorized
+                - not_found
+                - invalid_charger_id
+                - invalid_reading
+                - session_too_long
+                - conflicting_reading
+                - session_stopped
+                - stop_conflict
+                - active_session_exists
+                - internal
+            message:
+              type: string
