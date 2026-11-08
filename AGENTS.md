@@ -30,6 +30,8 @@ Integration tests use the `evbilling_test` database through `TEST_DATABASE_URL`.
 
 - `render.yaml` is the Render Blueprint: a free Go web service and a free Postgres 18 database in Singapore. Render deploys only after every CI check on `main` passes (`autoDeployTrigger: checksPass`), and uses `/healthz` as the health check.
 - `API_KEY` is set in the Render dashboard (`sync: false`) and is never committed.
+- `LTA_ACCOUNT_KEY` (the DataMall AccountKey for the live mirror) is declared with `sync: false`, set in the Render dashboard and never committed. Without it the mirror is off.
+- An external uptime monitor (for example cron-job.org or UptimeRobot) requests `https://ev-billing.onrender.com/healthz` every 5–10 minutes, because the poller sleeps when the free service does. `/healthz` stays database-only. This must stay the only free web service in the Render workspace (744 of the 750 free instance hours in a 31-day month).
 - The free Render Postgres database expires 30 days after it is created. Render then allows a 14-day grace period before deleting it with its data. Upgrade it or recreate the Blueprint's database before then. Free databases have no backups.
 - The free web service spins down after 15 minutes without traffic, and the next request waits about a minute for it to start. The simulator's 90 s HTTP timeout allows for this.
 
