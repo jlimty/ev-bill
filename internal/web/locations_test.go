@@ -177,25 +177,25 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 
 	a := card(t, body, "Alpha Mall")
 	wantContains(t, a, `<p class="sub">Otherco, Testco · 2 connectors</p>`,
-		`<span class="pct">25%</span><span class="vh">&nbsp;·&nbsp;</span><span class="label">25 h avg · observed</span>`,
+		`<span class="pct" data-watch>25%</span><span class="vh">&nbsp;·&nbsp;</span><span class="label">25 h avg · observed</span>`,
 		`<p class="facts">3 billing sessions · est. 4.0 kWh · price n/a for 1 session · $2.44 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
 	if strings.Contains(a, "collecting data") {
 		t.Errorf("LOC-4: sufficient site has a collecting note: %s", a)
 	}
 
 	b := card(t, body, "Bravo Hub")
-	wantContains(t, b, `<p class="sub">Testco · 1 connector</p>`, `<span class="pct">10%</span>`,
+	wantContains(t, b, `<p class="sub">Testco · 1 connector</p>`, `<span class="pct" data-watch>10%</span>`,
 		`<p class="facts">0 billing sessions · est. 0.0 kWh · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
 	if strings.Contains(b, "price n/a") {
 		t.Errorf("LOC-6: no price n/a note expected with no sessions: %s", b)
 	}
 
 	c := card(t, body, "Charlie Park")
-	wantContains(t, c, `<span class="pct">50%</span>`, `<p class="note">collecting data · 5 h</p>`,
+	wantContains(t, c, `<span class="pct" data-watch>50%</span>`, `<p class="note">collecting data · 5 h</p>`,
 		`<p class="facts">2 billing sessions · est. 1.0 kWh · price n/a for 2 sessions · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
 
 	d := card(t, body, "Delta Point")
-	wantContains(t, d, `<span class="pct">n/a</span>`)
+	wantContains(t, d, `<span class="pct" data-watch>n/a</span>`)
 	if strings.Contains(d, `class="label">observed`) || strings.Contains(d, "collecting data") {
 		t.Errorf("LOC-4: an n/a site has no observed label and, sufficient, no collecting note: %s", d)
 	}
@@ -248,7 +248,7 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 		e.mirrorStopped("A-001", sgt(22, 0, 6), sgt(22, 30, 6), 2500)
 		body := e.get("/").Body.String()
 		wantContains(t, body, `<p class="headline">Collecting data · 0 h observed so far</p>`,
-			`<span class="pct">n/a</span>`, `<p class="note">collecting data · 0 h</p>`,
+			`<span class="pct" data-watch>n/a</span>`, `<p class="note">collecting data · 0 h</p>`,
 			`<p class="facts">0 billing sessions · est. 0.0 kWh · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
 		if strings.Contains(body, `class="window"`) {
 			t.Errorf("LOC-4: a window line with no sample to date it: %s", body)
@@ -662,8 +662,11 @@ func TestLocations_VIEW6_Keys(t *testing.T) {
 	wantContains(t, c,
 		`<li class="cell busy" data-key="K-001" data-watch title=`,
 		`<li class="cell busy" data-key="K-002" data-watch title=`,
-		`<p class="util" data-watch>`,
+		`<span class="pct" data-watch>`,
 		`<p class="count" data-watch>`)
+	if strings.Contains(body, `<p class="util" data-watch>`) {
+		t.Error("VIEW-6: the utilization line is watched; its hour count would flash every hour")
+	}
 	if strings.Contains(body, `class="feed" data-watch`) || strings.Contains(body, `class="feed warn" data-watch`) {
 		t.Error("VIEW-6: the feed line is watched")
 	}

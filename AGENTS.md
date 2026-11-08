@@ -18,7 +18,7 @@ A small Go service that bills EV charging sessions on a peak/off-peak tariff, wi
 - `make fmt-check`: fails if `gofmt` would change a file.
 - `make lint`: `go vet` and `golangci-lint` (includes a rule that forbids `time.Local`).
 - `make test`: tests with `-race` and coverage, then the coverage gate (`scripts/coverage-gate.sh`).
-- `make test-tz`: billing tests under `TZ=UTC` and `TZ=America/New_York`.
+- `make test-tz`: billing and web time tests (VIEW-4 axis, VIEW-8 clock) under `TZ=UTC` and `TZ=America/New_York`.
 - `make vuln`: `govulncheck`.
 - `make secrets`: `gitleaks` over git history and the working tree.
 - `make mutation`: mutation score for `internal/billing`. Not part of `check`.

@@ -77,6 +77,7 @@ type hourBar struct {
 // locationsRedirect sends the old /locations address to the home page (NAV-1).
 // A permanent redirect keeps existing links working.
 func (p *Pages) locationsRedirect(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
 	http.Redirect(w, r, "/", http.StatusMovedPermanently)
 }
 

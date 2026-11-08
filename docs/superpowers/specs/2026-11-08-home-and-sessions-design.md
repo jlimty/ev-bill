@@ -116,7 +116,7 @@ This work makes Locations the home page and Sessions its drill-down, and fixes t
 - **VIEW-4 Detail page.**
   - **The h1 is the charger ID.** Under it: "Session · {location}" for mirror sessions, or "Session · simulated". The duplicate first `dl` row goes.
   - **A summary line comes first:** "8.3 kWh est. · $5.17 est. · 10 min · occupied". Duration runs from start to stop, or to the last reading if active.
-  - **Stopped:** "still occupied" (mirror) or "still charging" (api) instead of "-".
+  - **Stopped:** "still occupied" (mirror) or "still charging" (api) instead of "-". A stale session (SES-4) reads "not stopped", so it does not contradict its stale badge.
   - **Tariff bar on a time axis.** The axis runs from the tariff boundary at or before the start to the boundary at or after the last point. A start or last point that falls exactly on a boundary uses that boundary.
     - **Boundary labels:** each boundary on the axis is labelled (07:00, 23:00). When the axis covers more than one Singapore calendar day, labels include the date, as the existing times do for sessions of 24 h or more.
     - **Segments** fill their share of the axis. Axis time outside the session is drawn as an empty track.
@@ -294,7 +294,7 @@ Each test names its rule.
 | Hours line | Busiest {hh}:00–{hh+1 mod 24}:00 ({p}%) · quietest … / Every observed hour {N}% |
 | Collecting order | · sites still collecting data follow in name order |
 | Stream status | Updates paused · reloading soon / Reconnecting… / Updates paused |
-| Detail stopped | still occupied / still charging |
+| Detail stopped | still occupied / still charging / not stopped (stale) |
 | Detail, no readings | No meter readings yet |
 | Skip link | Skip to content |
 
