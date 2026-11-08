@@ -26,6 +26,13 @@ A small Go service that bills EV charging sessions on a peak/off-peak tariff, wi
 
 Integration tests use the `evbilling_test` database through `TEST_DATABASE_URL`.
 
+## Deployment
+
+- `render.yaml` is the Render Blueprint: a free Go web service and a free Postgres 18 database in Singapore. Render deploys only after every CI check on `main` passes (`autoDeployTrigger: checksPass`), and uses `/healthz` as the health check.
+- `API_KEY` is set in the Render dashboard (`sync: false`) and is never committed.
+- The free Render Postgres database expires 30 days after it is created. Render then allows a 14-day grace period before deleting it with its data. Upgrade it or recreate the Blueprint's database before then. Free databases have no backups.
+- The free web service spins down after 15 minutes without traffic, and the next request waits about a minute for it to start. The simulator's 90 s HTTP timeout allows for this.
+
 ## Global Constraints
 
 - Money is `int64` cents, energy is `int64` Wh, rates are `int64` cents per kWh. No floats in `internal/billing`.
