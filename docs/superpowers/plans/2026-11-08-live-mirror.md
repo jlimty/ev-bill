@@ -194,7 +194,11 @@ Also commits the design doc and the original spec's changes.
       Connectors []datamall.Connector       // already capped at MaxConnectors, sorted
       Prev       map[string]ChargerState
       Open       map[string]OpenSession     // by ChargerID
-      LastStopWh map[string]int64           // latest stopped mirror session's meter, by ChargerID
+      LastStop   map[string]LastStop        // latest stopped mirror session, by ChargerID
+  }
+  type LastStop struct {
+      MeterWh int64
+      AtLimit bool // that session lasted the full sessions.MaxDuration (stopped by MIR-12)
       GapAfter   time.Duration
   }
   type Result struct { Actions []Action; Next map[string]ChargerState }
@@ -211,10 +215,10 @@ open session s exists:
                                               and, if occupied and not Prev.Held, Start(c, Observed, s.Last.MeterWh)   [MIR-5 carry]
   occupied and Observed >= s.StartedAt+48h → Stop(s, s.StartedAt+48h, Meter(s.Last, s.StartedAt+48h, p)); Next.Held = true   [MIR-12]
   occupied                                 → Read(s, Observed, Meter(s.Last, Observed, p))
-  not occupied                             → Stop(s, Observed, Meter(s.Last, Observed, p))
+  not occupied                             → end := min(Observed, s.StartedAt+48h); Stop(s, end, Meter(s.Last, end, p))   [SES-5]
 no open session:
-  occupied and Prev.Held                   → nothing
-  occupied                                 → Start(c, Observed, carry), carry = LastStopWh[c] if Prev.Status == Occupied, else 0
+  occupied and (Prev.Held or (Prev.Status == Occupied and LastStop[c].AtLimit)) → nothing; Next.Held = true   [MIR-12, survives a cut cycle]
+  occupied                                 → Start(c, Observed, carry), carry = LastStop[c].MeterWh if Prev.Status == Occupied, else 0
   not occupied                             → nothing
 Next[c] = {Status: c.Status, Held: Held && occupied}   (Held clears once the connector is seen not occupied)
 open sessions for chargers absent from Connectors → Stop(s, s.Last.At, s.Last.MeterWh)   [MIR-6]
@@ -234,7 +238,7 @@ open sessions for chargers absent from Connectors → Stop(s, s.Last.At, s.Last.
   - `TestPlan_MIR5_GapAndFreeOnlyCloses`: gap and now available → a Stop only.
   - `TestPlan_MIR12_StopsAt48hAndHolds`: started 48 h 3 min ago and occupied → Stop at exactly `StartedAt+48h`, and `Next.Held` is true. The next plan, with `Prev.Held` set and still occupied → no actions. Then available → `Held` false. Then occupied → Start with meter 0.
   - `TestPlan_MIR4_CapAcrossSessions`: a gap split at 59,000 Wh, then a Read 1 h later at 50 kW → meter 60,000.
-  - `TestPlan_MIR4_CarryAfterCutCycle`: no open session, `Prev.Status == Occupied`, `LastStopWh` 5,000 → Start at 5,000. With `Prev.Status == Available` → Start at 0.
+  - `TestPlan_MIR4_CarryAfterCutCycle`: no open session, `Prev.Status == Occupied`, `LastStop` {5,000, AtLimit false} → Start at 5,000. With `Prev.Status == Available` → Start at 0.
   - `TestPlan_MIR6_UnwatchedOpenSessionClosesAtLastPoint`.
   - `TestPlan_Deterministic`: the same input gives the same actions in the same order.
 - [ ] **Step 2: Run them and confirm they fail.** Run `go test ./internal/mirror/`. Expected: compile errors.
@@ -266,7 +270,8 @@ open sessions for chargers absent from Connectors → Stop(s, s.Last.At, s.Last.
   func (s *Store) ChargerStates(ctx context.Context) (map[string]ChargerRow, error)
   func (s *Store) LatestObservation(ctx context.Context) (time.Time, bool, error)       // max(observed_at)
   func (s *Store) OpenMirrorSessions(ctx context.Context) ([]SessionWithReadings, error)
-  func (s *Store) LastMirrorStops(ctx context.Context) (map[string]int64, error)          // DISTINCT ON (charger_id) newest stopped mirror session
+  type MirrorStop struct { MeterWh int64; StartedAt, StoppedAt time.Time }
+  func (s *Store) LastMirrorStops(ctx context.Context) (map[string]MirrorStop, error)     // DISTINCT ON (charger_id) newest stopped mirror session; the reconciler sets mirror.LastStop.AtLimit = StoppedAt-StartedAt >= sessions.MaxDuration
   func (s *Store) DeleteCompletedMirrorBefore(ctx context.Context, cutoff time.Time) (int64, error)
   func (s *Store) Charger(ctx context.Context, chargerID string) (ChargerRow, bool, error)
   func (s *Store) HeldCount(ctx context.Context) (int, error)                             // chargers with held = true (MIR-12)

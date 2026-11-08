@@ -120,9 +120,9 @@ func TestPlan_MIR5_GapThresholdIsStrict(t *testing.T) {
 		Connectors: []datamall.Connector{conn("C1", datamall.Occupied, "AC", 3_600)},
 		Open:       map[string]OpenSession{"C1": open("S1", "C1", t0.Add(-time.Hour), last, 0)},
 	}
-	got := Plan(in).Actions
-	if len(got) != 1 || got[0].Kind != ActRead {
-		t.Fatalf("actions = %+v, want one read", got)
+	want := []Action{act(ActRead, "C1", "S1", t0, 660)} // 3,600 W for 11 min
+	if got := Plan(in).Actions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("actions = %+v, want %+v", got, want)
 	}
 }
 
@@ -181,8 +181,8 @@ func TestPlan_MIR12_StopsAt48hAndHolds(t *testing.T) {
 	// 4. Occupied again: a fresh session at meter 0.
 	res = Plan(Input{
 		Observed: t0.Add(15 * time.Minute), GapAfter: gap, Connectors: c,
-		Prev:       map[string]ChargerState{"C1": {Status: datamall.Available}},
-		LastStopWh: map[string]int64{"C1": 10_240},
+		Prev:     map[string]ChargerState{"C1": {Status: datamall.Available}},
+		LastStop: map[string]LastStop{"C1": {MeterWh: 10_240, AtLimit: true}},
 	})
 	want = []Action{act(ActStart, "C1", "", t0.Add(15*time.Minute), 0)}
 	if !reflect.DeepEqual(res.Actions, want) {
@@ -246,7 +246,7 @@ func TestPlan_MIR4_CarryAfterCutCycle(t *testing.T) {
 				Observed: t0, GapAfter: gap,
 				Connectors: []datamall.Connector{conn("C1", datamall.Occupied, "AC", 7_200)},
 				Prev:       map[string]ChargerState{"C1": {Status: tc.prev}},
-				LastStopWh: map[string]int64{"C1": 5_000},
+				LastStop:   map[string]LastStop{"C1": {MeterWh: 5_000}},
 			})
 			want := []Action{act(ActStart, "C1", "", t0, tc.want)}
 			if !reflect.DeepEqual(res.Actions, want) {
@@ -305,5 +305,57 @@ func TestPlan_Deterministic(t *testing.T) {
 	}
 	if in.Connectors[0].ChargerID != "C3" {
 		t.Fatal("Plan reordered the caller's connectors")
+	}
+}
+
+func TestPlan_MIR12_FreeAfter48hStopsAtLimit(t *testing.T) {
+	started := t0.Add(-48*time.Hour - 2*time.Minute)
+	last := t0.Add(-5 * time.Minute)
+	end := started.Add(48 * time.Hour)
+	res := Plan(Input{
+		Observed: t0, GapAfter: gap,
+		Connectors: []datamall.Connector{conn("C1", datamall.Available, "AC", 7_200)},
+		Open:       map[string]OpenSession{"C1": open("S1", "C1", started, last, 10_000)},
+	})
+	// end is 3 min after last: 7200*180/3600 = 360.
+	want := []Action{act(ActStop, "C1", "S1", end, 10_360)}
+	if !reflect.DeepEqual(res.Actions, want) {
+		t.Fatalf("actions = %+v, want %+v", res.Actions, want)
+	}
+	if res.Next["C1"].Held {
+		t.Fatal("Next.Held = true, want false")
+	}
+}
+
+func TestPlan_MIR12_ExactlyAt48hStopsAndHolds(t *testing.T) {
+	started := t0.Add(-48 * time.Hour)
+	last := t0.Add(-5 * time.Minute)
+	res := Plan(Input{
+		Observed: t0, GapAfter: gap,
+		Connectors: []datamall.Connector{conn("C1", datamall.Occupied, "AC", 7_200)},
+		Open:       map[string]OpenSession{"C1": open("S1", "C1", started, last, 10_000)},
+	})
+	want := []Action{act(ActStop, "C1", "S1", t0, 10_600)} // 7200*300/3600 = 600
+	if !reflect.DeepEqual(res.Actions, want) || !res.Next["C1"].Held {
+		t.Fatalf("actions = %+v, next = %+v", res.Actions, res.Next["C1"])
+	}
+}
+
+func TestPlan_MIR12_CutCycleAfter48hStaysHeld(t *testing.T) {
+	prev := map[string]ChargerState{"C1": {Status: datamall.Occupied}}
+	ls := map[string]LastStop{"C1": {MeterWh: 9_000, AtLimit: true}}
+	res := Plan(Input{
+		Observed: t0, GapAfter: gap, Prev: prev, LastStop: ls,
+		Connectors: []datamall.Connector{conn("C1", datamall.Occupied, "AC", 7_200)},
+	})
+	if len(res.Actions) != 0 || !res.Next["C1"].Held {
+		t.Fatalf("actions = %+v, next = %+v", res.Actions, res.Next["C1"])
+	}
+	res = Plan(Input{
+		Observed: t0.Add(5 * time.Minute), GapAfter: gap, Prev: prev, LastStop: ls,
+		Connectors: []datamall.Connector{conn("C1", datamall.Available, "AC", 7_200)},
+	})
+	if len(res.Actions) != 0 || res.Next["C1"].Held {
+		t.Fatalf("free: actions = %+v, next = %+v", res.Actions, res.Next["C1"])
 	}
 }

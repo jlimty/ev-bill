@@ -55,13 +55,20 @@ type Action struct {
 	MeterWh   int64
 }
 
+// LastStop describes the latest stopped mirror session of a charger.
+type LastStop struct {
+	MeterWh int64
+	// AtLimit is true when that session lasted the full sessions.MaxDuration.
+	AtLimit bool
+}
+
 // Input is everything Plan needs.
 type Input struct {
 	Observed   time.Time
 	Connectors []datamall.Connector // already capped at MaxConnectors
 	Prev       map[string]ChargerState
 	Open       map[string]OpenSession // by ChargerID
-	LastStopWh map[string]int64       // latest stopped mirror session's meter, by ChargerID
+	LastStop   map[string]LastStop    // latest stopped mirror session, by ChargerID
 	GapAfter   time.Duration
 }
 
@@ -117,12 +124,18 @@ func Plan(in Input) Result {
 
 		if s, ok := in.Open[c.ChargerID]; ok {
 			res.Actions = append(res.Actions, planOpen(in, c, s, prev, occupied, p, &held)...)
-		} else if occupied && !prev.Held {
-			carry := int64(0)
-			if prev.Status == datamall.Occupied {
-				carry = in.LastStopWh[c.ChargerID]
+		} else if occupied {
+			ls := in.LastStop[c.ChargerID]
+			if prev.Held || (prev.Status == datamall.Occupied && ls.AtLimit) {
+				// MIR-12: hold, including after a cut cycle lost Held.
+				held = true
+			} else {
+				carry := int64(0)
+				if prev.Status == datamall.Occupied {
+					carry = ls.MeterWh
+				}
+				res.Actions = append(res.Actions, start(c.ChargerID, in.Observed, carry))
 			}
-			res.Actions = append(res.Actions, start(c.ChargerID, in.Observed, carry))
 		}
 		res.Next[c.ChargerID] = ChargerState{Status: c.Status, Held: held}
 	}
@@ -143,6 +156,7 @@ func Plan(in Input) Result {
 
 // planOpen decides the actions for a connector that has an open session.
 func planOpen(in Input, c datamall.Connector, s OpenSession, prev ChargerState, occupied bool, p int64, held *bool) []Action {
+	// If prev.Held is set with an open session, held stays as it is while occupied.
 	switch {
 	case in.Observed.Sub(s.Last.At) > in.GapAfter: // MIR-5
 		acts := []Action{stop(s, s.Last.At, s.Last.MeterWh)}
@@ -157,7 +171,12 @@ func planOpen(in Input, c datamall.Connector, s OpenSession, prev ChargerState, 
 	case occupied:
 		return []Action{{Kind: ActRead, ChargerID: c.ChargerID, SessionID: s.ID, At: in.Observed, MeterWh: Meter(s.Last, in.Observed, p)}}
 	default:
-		return []Action{stop(s, in.Observed, Meter(s.Last, in.Observed, p))}
+		// MIR-12: the store rejects a stop past started+48h, so clamp.
+		end := in.Observed
+		if limit := s.StartedAt.Add(sessions.MaxDuration); end.After(limit) {
+			end = limit
+		}
+		return []Action{stop(s, end, Meter(s.Last, end, p))}
 	}
 }
 
