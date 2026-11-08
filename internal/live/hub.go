@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // Hub fans a "sessions changed" signal out to subscribers (LIVE-2). One
@@ -16,6 +17,7 @@ import (
 type Hub struct {
 	maxSubs int
 	in      chan struct{} // capacity 1: Publish coalesces into one waiting signal
+	gen     atomic.Uint64 // broadcasts so far; see Gen
 
 	mu      sync.Mutex
 	subs    map[chan struct{}]struct{}
@@ -80,9 +82,17 @@ func (h *Hub) Subscribe() (ch <-chan struct{}, cancel func(), ok bool) {
 	return c, cancel, true
 }
 
+// Gen returns the hub's generation: the number of broadcasts so far. It goes
+// up before each broadcast's signals are sent, so a subscriber that reads Gen
+// after receiving a signal sees that broadcast's generation or a later one.
+// Streams key their shared renders by it: one render per view per generation
+// serves every stream on that view (LIVE-1, LIVE-2).
+func (h *Hub) Gen() uint64 { return h.gen.Load() }
+
 func (h *Hub) broadcast() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.gen.Add(1)
 	for c := range h.subs {
 		select {
 		case c <- struct{}{}:

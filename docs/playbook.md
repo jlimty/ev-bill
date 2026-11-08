@@ -25,7 +25,7 @@ A new or changed gate must be shown failing first, including when its own tool i
 
 ## Where mistakes were caught
 
-Of 30 logged mistakes, review caught 24 (5 of them by manually mutating the code), Sonar caught 4, a pre-flight scan of the plan caught 1, and 1 came from the implementer's own report.
+Of 32 logged mistakes, review caught 26 (5 of them by manually mutating the code), Sonar caught 4, a pre-flight scan of the plan caught 1, and 1 came from the implementer's own report.
 
 ## From mistake to guardrail
 
