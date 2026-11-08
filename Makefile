@@ -1,9 +1,3 @@
-# Tools installed with `go install` (govulncheck, gremlins) live in GOPATH/bin,
-# which is not always on PATH, so they are run by full path. Putting this
-# directory on PATH inside the Makefile is not enough: GNU Make 3.81 (the macOS
-# default) starts simple commands itself, using the PATH it was launched with.
-GOPATH_BIN := $(shell go env GOPATH)/bin
-
 # Integration tests use this database. Override it from the environment if needed.
 TEST_DATABASE_URL ?= postgres://localhost:5432/evbilling_test?sslmode=disable
 export TEST_DATABASE_URL
@@ -40,7 +34,7 @@ test-tz:
 	fi
 
 vuln:
-	$(GOPATH_BIN)/govulncheck ./...
+	go tool govulncheck ./...
 
 # Two scans: committed history, and the working tree. The history scan cannot
 # see uncommitted files, so without the second scan a secret could be caught
@@ -52,9 +46,14 @@ secrets:
 	gitleaks dir --redact -v --config scripts/gitleaks-worktree.toml
 
 # Reports the mutation score. Not part of `check`.
+# gremlins sets each mutant's timeout to the time of its first coverage run
+# times --timeout-coefficient. This suite runs in about 0.1 s, less than one
+# compile, so the default coefficient made every mutant "time out" and the
+# score read 0%. 50 leaves room for a compile; a mutant that loops forever
+# still ends as TIMED OUT after a few seconds.
 mutation:
 	@if [ -d internal/billing ]; then \
-		$(GOPATH_BIN)/gremlins unleash ./internal/billing; \
+		go tool gremlins unleash --timeout-coefficient 50 ./internal/billing; \
 	else \
 		echo "mutation: skipped, internal/billing does not exist yet"; \
 	fi

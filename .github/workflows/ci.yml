@@ -77,7 +77,6 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - run: make vuln
 
   secrets:
@@ -92,9 +91,58 @@ jobs:
       # GitHub publishes for this release asset.
       - name: Install gitleaks 8.30.1
         run: |
-          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+          curl --proto '=https' --tlsv1.2 -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
             https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
           sudo install "$RUNNER_TEMP/gitleaks" /usr/local/bin/gitleaks
       - run: make secrets
+
+  # A report, not a gate: the report step always exits 0, because the deploy
+  # blocks on any failed check. Only a setup failure (checkout, setup-go), a
+  # cancellation or the timeout below can fail this job. It is not in the list
+  # of required checks.
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Mutation report
+        run: |
+          # Run the mutation tests and keep the output. `|| status=$?` stops the
+          # shell's exit-on-error from ending the step before we record it.
+          status=0
+          make mutation > "$RUNNER_TEMP/mutation.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/mutation.txt"
+
+          # "Killed: 43, Lived: 3, ..." -> the number of mutants actually tested.
+          tested=$(sed -n 's/^Killed: \([0-9]*\), Lived: \([0-9]*\),.*/\1 \2/p' "$RUNNER_TEMP/mutation.txt" | awk '{print $1 + $2}')
+
+          {
+            echo "## Mutation report (internal/billing)"
+            echo
+            if grep -q '^mutation: skipped' "$RUNNER_TEMP/mutation.txt"; then
+              # The Makefile found no internal/billing directory.
+              echo "Skipped: $(cat "$RUNNER_TEMP/mutation.txt")"
+            elif [ "$status" -eq 0 ] && [ "${tested:-0}" -gt 0 ] && grep -q 'Test efficacy' "$RUNNER_TEMP/mutation.txt"; then
+              echo '```'
+              grep -E '^(Killed|Timed out|Test efficacy|Mutator coverage)' "$RUNNER_TEMP/mutation.txt"
+              echo '```'
+            else
+              # Non-zero exit, no score printed, or no mutant killed or lived
+              # (for example every mutant timed out, which prints 0.00%).
+              # Never report these as a score.
+              echo "**The mutation run failed (exit code $status; mutants tested: ${tested:-none}), so there is no score.**"
+              echo
+              echo 'Last lines of output:'
+              echo '```'
+              tail -n 20 "$RUNNER_TEMP/mutation.txt"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Report only: never fail the job.
+          exit 0

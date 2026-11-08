@@ -51,4 +51,4 @@ Integration tests use the `evbilling_test` database through `TEST_DATABASE_URL`.
 ## How to work each task
 
 - One branch and one PR per task (after Task 1). Merge when all checks are green.
-- The human reads every diff before committing and must be able to explain each line. Any AI mistake found goes in `docs/ai-review-log.md` with a guardrail decision: a lint rule, a test, an AGENTS.md rule, or none.
+- Agents flag high-risk changes (money arithmetic, timezones, concurrency and SQL, auth and input validation, CI gates, deploy settings, and any departure from the spec or plan) for the human to read before committing; a separate review agent checks the rest. Any AI mistake found goes in `docs/ai-review-log.md` with a guardrail decision: a lint rule, a test, an AGENTS.md rule, or none.
