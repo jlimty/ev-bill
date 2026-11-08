@@ -33,7 +33,7 @@ func TestParseKW_MIR4(t *testing.T) {
 		want int64
 	}{
 		{"7.4", 7400}, {"22", 22000}, {"120", 120000}, {"480", 480000},
-		{"3.7", 3700}, {"0.001", 1}, {"1000", 1000000}, {"0", 0},
+		{"3.7", 3700}, {"0.001", 1}, {"1000", 1000000},
 	}
 	for _, tc := range good {
 		got, err := ParseKW(tc.in)
@@ -41,7 +41,7 @@ func TestParseKW_MIR4(t *testing.T) {
 			t.Errorf("ParseKW(%q) = %d, %v; want %d", tc.in, got, err, tc.want)
 		}
 	}
-	bad := []string{"", "-7", "7.4.1", "1e3", " 7", "7.0001", "1001", ".5", "7.", "+7", "99999999999999999999"}
+	bad := []string{"", "-7", "7.4.1", "1e3", " 7", "7.0001", "1001", ".5", "7.", "+7", "99999999999999999999", "0", "0.0", "0.000"}
 	for _, in := range bad {
 		if got, err := ParseKW(in); err == nil {
 			t.Errorf("ParseKW(%q) = %d, nil; want an error", in, got)
@@ -127,16 +127,22 @@ func TestDecode_MIR4_BadRatingSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
-	if len(snap.Skipped) != 1 || snap.Skipped[0] != "TST-C-001" {
-		t.Errorf("Skipped = %v, want [TST-C-001]", snap.Skipped)
+	// C-001 bad rating, C-002 zero rating, C-003 and C-004 current not AC/DC.
+	want := []string{"TST-C-001", "TST-C-002", "TST-C-003", "TST-C-004"}
+	if strings.Join(snap.Skipped, ",") != strings.Join(want, ",") {
+		t.Errorf("Skipped = %v, want %v", snap.Skipped, want)
 	}
+	got := map[string]bool{}
 	for _, c := range snap.Connectors {
-		if c.ChargerID == "TST-C-001" {
-			t.Errorf("TST-C-001 must not be in Connectors")
+		got[c.ChargerID] = true
+	}
+	for _, id := range want {
+		if got[id] {
+			t.Errorf("%s must not be in Connectors", id)
 		}
 	}
-	if len(snap.Connectors) != 2 {
-		t.Errorf("got %d connectors, want the 2 at 100001", len(snap.Connectors))
+	if len(snap.Connectors) != 3 || !got["TST-C-005"] {
+		t.Errorf("got %+v, want the 2 at 100001 plus TST-C-005", snap.Connectors)
 	}
 }
 
@@ -163,5 +169,42 @@ func TestDecode_Errors(t *testing.T) {
 	}
 	if _, err := Decode(strings.NewReader(good), nil, nil); err == nil {
 		t.Error("nil location: want an error")
+	}
+}
+
+// MIR-4: current must be exactly AC or DC; anything else is skipped.
+func TestDecode_MIR4_CurrentValidated(t *testing.T) {
+	in := `{"LastUpdatedTime":"2026-11-08 13:45:00","evLocationsData":[{"postalCode":"1","chargingPoints":[{"plugTypes":[
+	{"current":"AC","powerRating":"7","evIds":[{"evCpId":"A"}]},
+	{"current":"DC","powerRating":"50","evIds":[{"evCpId":"B"}]},
+	{"current":"Dc","powerRating":"50","evIds":[{"evCpId":"C"}]},
+	{"current":"","powerRating":"50","evIds":[{"evCpId":"D"}]}]}]}]}`
+	snap, err := Decode(strings.NewReader(in), sgt(t), map[string]bool{"1": true})
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(snap.Connectors) != 2 || strings.Join(snap.Skipped, ",") != "C,D" {
+		t.Errorf("connectors %+v skipped %v", snap.Connectors, snap.Skipped)
+	}
+}
+
+// MIR-2: an empty charger ID is skipped as "<empty>"; of a repeated ID the
+// first is kept and the repeat is skipped; output order is stable.
+func TestDecode_MIR2_EmptyAndDuplicateIDs(t *testing.T) {
+	in := `{"LastUpdatedTime":"2026-11-08 13:45:00","evLocationsData":[
+	{"postalCode":"1","name":"first","chargingPoints":[{"plugTypes":[
+	{"current":"AC","powerRating":"7","evIds":[{"evCpId":"X","status":"1"},{"evCpId":""},{"evCpId":"Y"}]}]}]},
+	{"postalCode":"2","name":"second","chargingPoints":[{"plugTypes":[
+	{"current":"AC","powerRating":"7","evIds":[{"evCpId":"X","status":"0"}]}]}]}]}`
+	snap, err := Decode(strings.NewReader(in), sgt(t), map[string]bool{"1": true, "2": true})
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(snap.Connectors) != 2 || snap.Connectors[0].ChargerID != "X" || snap.Connectors[0].LocationName != "first" ||
+		snap.Connectors[0].Status != Available || snap.Connectors[1].ChargerID != "Y" {
+		t.Errorf("connectors = %+v", snap.Connectors)
+	}
+	if strings.Join(snap.Skipped, ",") != "<empty>,X" {
+		t.Errorf("Skipped = %v, want [<empty> X]", snap.Skipped)
 	}
 }

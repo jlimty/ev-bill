@@ -103,6 +103,16 @@ func (c *Client) get(ctx context.Context, rawURL, key string) (io.ReadCloser, er
 	if hc == nil {
 		hc = &http.Client{Timeout: defaultTimeout}
 	}
+	if key != "" {
+		// net/http copies custom headers on redirect, even to another host,
+		// so a redirect would forward the AccountKey. Refuse it, on a copy so
+		// the caller's client is untouched.
+		noRedirect := *hc
+		noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return errors.New("datamall: redirect refused on the AccountKey request")
+		}
+		hc = &noRedirect
+	}
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err

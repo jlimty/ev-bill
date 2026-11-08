@@ -94,6 +94,9 @@ func ParseKW(s string) (int64, error) {
 		f *= 10
 	}
 	watts := w*1000 + f
+	if watts < 1 {
+		return 0, fmt.Errorf("power rating %q is not above zero", s)
+	}
 	if watts > maxPowerW {
 		return 0, fmt.Errorf("power rating %q is above 1000 kW", s)
 	}
@@ -125,7 +128,8 @@ type feedLocation struct {
 // time, so the whole tree is never in memory, and ignores unknown keys. Only
 // connectors at the requested postal codes are returned (MIR-2). The
 // timestamp is read in loc (MIR-3). A connector whose rating does not parse
-// is left out and listed in Skipped (MIR-4).
+// is left out and listed in Skipped (MIR-4), as is one whose current is not
+// AC or DC, one with an empty ID ("<empty>"), and any repeat of an ID (the first is kept).
 func Decode(r io.Reader, loc *time.Location, postalCodes map[string]bool) (Snapshot, error) {
 	var snap Snapshot
 	if loc == nil {
@@ -172,7 +176,7 @@ func Decode(r io.Reader, loc *time.Location, postalCodes map[string]bool) (Snaps
 		return snap, fmt.Errorf("datamall: LastUpdatedTime: %w", err)
 	}
 	snap.UpdatedAt = t
-	sort.Slice(snap.Connectors, func(i, j int) bool { return snap.Connectors[i].ChargerID < snap.Connectors[j].ChargerID })
+	sort.SliceStable(snap.Connectors, func(i, j int) bool { return snap.Connectors[i].ChargerID < snap.Connectors[j].ChargerID })
 	sort.Strings(snap.Skipped)
 	return snap, nil
 }
@@ -189,6 +193,7 @@ func expectDelim(dec *json.Decoder, want json.Delim) error {
 }
 
 func decodeLocations(dec *json.Decoder, postalCodes map[string]bool, snap *Snapshot) error {
+	seen := map[string]bool{}
 	if err := expectDelim(dec, '['); err != nil {
 		return fmt.Errorf("datamall: evLocationsData: %w", err)
 	}
@@ -203,11 +208,18 @@ func decodeLocations(dec *json.Decoder, postalCodes map[string]bool, snap *Snaps
 		for _, cp := range loc.ChargingPoints {
 			for _, pt := range cp.PlugTypes {
 				watts, werr := ParseKW(pt.PowerRating)
+				// The planner caps DC power, so an unknown current must never bill uncapped.
+				bad := werr != nil || (pt.Current != "AC" && pt.Current != "DC")
 				for _, id := range pt.EvIDs {
-					if werr != nil {
+					if id.EvCpID == "" {
+						snap.Skipped = append(snap.Skipped, "<empty>")
+						continue
+					}
+					if bad || seen[id.EvCpID] {
 						snap.Skipped = append(snap.Skipped, id.EvCpID)
 						continue
 					}
+					seen[id.EvCpID] = true
 					snap.Connectors = append(snap.Connectors, Connector{
 						ChargerID: id.EvCpID, LocationName: loc.Name, Address: loc.Address,
 						PostalCode: loc.PostalCode, Operator: cp.Operator, Position: cp.Position,

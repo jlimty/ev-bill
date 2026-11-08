@@ -184,6 +184,12 @@ func TestFetch_MIR1_Failures(t *testing.T) {
 				t.Fatal("want an error")
 			}
 			msg := err.Error()
+			if tc.name == "file 403 expired" {
+				want := "datamall: GET " + strings.TrimPrefix(f.srv.URL, "http://") + "/files/batch.json: status 403"
+				if msg != want {
+					t.Errorf("error = %q, want %q", msg, want)
+				}
+			}
 			for _, bad := range []string{testKey, "X-Amz", "?", "SECRET", "SIG"} {
 				if strings.Contains(msg, bad) {
 					t.Errorf("error leaks %q: %s", bad, msg)
@@ -252,5 +258,40 @@ func TestFetch_MIR1_ContextAndDefaults(t *testing.T) {
 		t.Error("bad base URL: want an error")
 	} else if strings.Contains(err.Error(), testKey) {
 		t.Errorf("leaks key: %v", err)
+	}
+}
+
+// MIR-1: a redirect on the AccountKey request must not forward the key to
+// the redirect target, and the caller's http.Client stays unchanged.
+func TestFetch_MIR1_RedirectDoesNotForwardKey(t *testing.T) {
+	var leaked bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("AccountKey") != "" {
+			leaked = true
+		}
+		send(t, w, `{"value":[{"Link":"http://example.invalid/x"}]}`)
+	}))
+	t.Cleanup(other.Close)
+
+	f := newFeedServer(t, &feedServer{})
+	f.link = func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/steal", http.StatusFound)
+	}
+	f.file = http.NotFound
+	c := f.client(t)
+	hc := &http.Client{Timeout: 5 * time.Second}
+	c.HTTP = hc
+	_, err := c.Fetch(context.Background(), nil)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if leaked {
+		t.Error("the redirect target received an AccountKey header")
+	}
+	if strings.Contains(err.Error(), testKey) {
+		t.Errorf("error leaks the key: %v", err)
+	}
+	if hc.CheckRedirect != nil {
+		t.Error("the caller's http.Client was modified")
 	}
 }
