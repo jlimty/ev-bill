@@ -10,6 +10,7 @@ Live: https://ev-billing.onrender.com (free tier, see [Deployment](#deployment))
 flowchart TB
     SIM["Chargers<br/>(cmd/simulator)"]
     BROWSER["Browser"]
+    LTA["LTA DataMall<br/>EV charging feed"]
 
     subgraph RENDER["Render web service (cmd/server)"]
         direction TB
@@ -28,12 +29,23 @@ flowchart TB
         SRV -->|"healthz ping"| STO
         WEB -->|"reads"| STO
         STO -->|"rules run in locked tx"| SES
+        POLL["poller<br/>every 5 min, off without LTA_ACCOUNT_KEY"]
+        REC["reconciler<br/>mirror sessions"]
+        HUB["hub<br/>fan-out, /events (SSE)"]
+        TICK["30 s refresh ticker"]
+        POLL --> REC
+        REC --> SES
+        REC -->|"writes"| STO
+        REC -->|"changed"| HUB
+        TICK --> HUB
+        HUB -->|"re-rendered tables"| WEB
     end
 
     DB[("Render Postgres 18")]
 
     SIM -->|"HTTPS JSON"| SRV
-    BROWSER -->|"HTTPS"| SRV
+    BROWSER -->|"HTTPS, EventSource /events"| SRV
+    POLL -->|"HTTPS, AccountKey"| LTA
     STO --> DB
 ```
 
@@ -49,6 +61,10 @@ flowchart TB
     RCI -->|"autoDeployTrigger: checksPass"| DEP["Render deploys"]
 ```
 
+### How the live mirror flows
+
+At startup and then every 5 minutes, `datamall` fetches the EV charging batch file (a link request with the `AccountKey` header, then a download of the file without it). `mirror` keeps the connectors at the watched postal codes, estimates their power, and the reconciler compares the occupied ones with the open mirror sessions in the database, starting, extending and stopping sessions through `store`. When a cycle changes something it publishes to the `live` hub; the hub also receives a signal every 30 s so relative times stay current. Each open `/events` stream (kept open with a heartbeat every 25 s) re-renders the list (or detail) fragment and sends it; `/static/live.js` swaps it into the page.
+
 ### How a request flows
 
 `POST /api/sessions/{id}/meter-values`: `server.RequestLogger` assigns a request ID and logs the request when it finishes. `api` checks `X-API-Key` in constant time, then decodes the body strictly (unknown fields, trailing data and bodies over 1 MiB are rejected). `store` opens a transaction and locks the session row with `SELECT ... FOR UPDATE`, loads the stored readings, and calls the pure rules in `sessions` (ordering, duplicates, limits). If the rules accept the reading, `store` inserts it and commits. `sessions` and `billing` then compute the status and the bill from the stored readings, and `api` returns the session as JSON (201 for a new reading, 200 for a duplicate). Rule failures map to 404, 409 or 422 with the `{"error": {"code", "message"}}` body.
@@ -63,10 +79,13 @@ flowchart TB
 | `internal/sessions` | Session rules (start, reading, stop, limits), derived status, and the bill view |
 | `internal/store` | Postgres access with pgx, row-locked write transactions, embedded goose migrations |
 | `internal/api` | JSON handlers and `X-API-Key` middleware |
-| `internal/web` | Status pages rendered with `html/template` |
+| `internal/web` | Status pages rendered with `html/template`, the `/events` stream and `/static/live.js` |
+| `internal/datamall` | DataMall client (link, then file download) and feed parser; integer watts, no floats |
+| `internal/mirror` | Poller, planner, reconciler and retention job for the live mirror |
+| `internal/live` | Hub that fans "changed" signals out to streams, the 30 s ticker, and the feed status |
 | `internal/server` | Top-level handler: request logging, `/healthz`, graceful serve |
 | `internal/reqid` | Carries the request ID through the request context |
-| `internal/config` | Reads `PORT`, `DATABASE_URL`, `API_KEY` |
+| `internal/config` | Reads `PORT`, `DATABASE_URL`, `API_KEY` and the optional mirror variables |
 | `internal/sim` | Simulator plans and API client |
 | `internal/testdb` | Test database helper |
 
@@ -132,7 +151,42 @@ The contract is [`api/openapi.yaml`](api/openapi.yaml); handler tests validate r
 | GET | `/api/sessions` | none | 200 (newest 50) |
 | GET | `/healthz` | none | 200, or 503 if the database ping fails within 2 s |
 
-Status pages: `/` (newest 50, refreshes every 3 s) and `/sessions/{id}` (segment bar and table).
+Status pages: `/` (newest 50) and `/sessions/{id}` (segment bar and table). They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 3 s.
+
+## Live mirror
+
+The server can mirror real charger occupancy from LTA DataMall's EV charging feed into billed sessions. It polls once at startup and then every 5 minutes. For each watched connector that the feed reports as occupied, it opens a `mirror` session and adds a reading at every poll; when the connector frees, it stops the session. The pages label each row `mirror` or `simulated`, and show a feed status line with the time of the last update.
+
+The feed has no energy data, so energy and cost for mirrored sessions are estimates (MIR-4):
+
+- An occupied connector is assumed to draw constant power: its rated power for AC, capped at 50 kW for DC.
+- Energy is capped at 60 kWh per occupancy. A gap in observation (sleep, deploy, feed outage) is never billed (MIR-5), and the cap carries across the sessions it splits.
+- The feed's "occupied" also covers reserved and blocked connectors.
+
+Default watched postal codes (68 connectors in the 2026-11-08 sample):
+
+| Postal code | Site | Connectors |
+|---|---|---|
+| `038983` | GV Suntec City | 28, AC and DC |
+| `519612` | Pasir Ris Mall | 20, DC |
+| `090032` | Blk 29/32 Telok Blangah Rise HDB car park | 20, AC |
+
+Environment variables (the first three are required, see [Quick start](#quick-start)):
+
+| Variable | Purpose |
+|---|---|
+| `PORT`, `DATABASE_URL`, `API_KEY` | Required for the server |
+| `LTA_ACCOUNT_KEY` | Optional. A DataMall AccountKey; when unset the mirror is off and the server logs that once |
+| `DATAMALL_BASE_URL` | Optional. Defaults to `https://datamall2.mytransport.sg`; must be an http or https URL with a host, and is checked at startup even when the mirror is off |
+| `MIRROR_POSTAL_CODES` | Optional. Comma-separated postal codes to watch; each entry must be six digits. If they select more than 100 connectors, the first 100 by charger ID are mirrored and a warning is logged |
+
+To run it locally, register for a free DataMall AccountKey, then:
+
+```sh
+LTA_ACCOUNT_KEY=<your key> make run
+```
+
+The first poll runs at startup; the feed line on http://localhost:8080/ shows the time of the last update. Without `LTA_ACCOUNT_KEY`, `make run` works as before and the feed line says "Live mirror off". The AccountKey is never logged, returned or rendered. Completed mirror sessions are deleted after 14 days; `api` sessions are never deleted automatically.
 
 ## Quality gates
 
@@ -148,12 +202,12 @@ Status pages: `/` (newest 50, refreshes every 3 s) and `/sessions/{id}` (segment
 
 ## Deployment
 
-[`render.yaml`](render.yaml) is a Render Blueprint with one free Go web service (`ev-billing`) and one free Postgres 18 database (`ev-billing-db`), both in Singapore. The service builds with `go build -o bin/server ./cmd/server`, health-checks `/healthz`, and uses `autoDeployTrigger: checksPass`, so Render deploys only after every required CI check on `main` passes. `DATABASE_URL` comes from the database; `API_KEY` is set in the Render dashboard and is never committed. Migrations run at startup.
+[`render.yaml`](render.yaml) is a Render Blueprint with one free Go web service (`ev-billing`) and one free Postgres 18 database (`ev-billing-db`), both in Singapore. The service builds with `go build -o bin/server ./cmd/server`, health-checks `/healthz`, and uses `autoDeployTrigger: checksPass`, so Render deploys only after every required CI check on `main` passes. `DATABASE_URL` comes from the database; `API_KEY` and `LTA_ACCOUNT_KEY` are set in the Render dashboard and are never committed. Migrations run at startup.
 
 Free-tier limits (Render's free-tier terms as of November 2026):
 
 - The free Postgres expires 30 days after creation and is deleted after a 14-day grace period. There are no backups.
-- The web service spins down after 15 idle minutes; the next request takes about a minute (cold start).
+- The web service spins down after 15 idle minutes; the next request takes about a minute (cold start). The poller sleeps with it, so an external uptime monitor pings `/healthz` every 5 to 10 minutes; see the [playbook](docs/playbook.md#live-mirror-operations).
 
 ## Known limitations
 
@@ -168,6 +222,8 @@ Free-tier limits (Render's free-tier terms as of November 2026):
 
 - [Spec](docs/superpowers/specs/2026-11-07-ev-billing-design.md): rule IDs (BIL, SES, API, UI, OPS)
 - [Plan](docs/superpowers/plans/2026-11-07-ev-billing.md)
+- [Live mirror spec](docs/superpowers/specs/2026-11-08-live-mirror-design.md): rule IDs MIR-1..12 (poller, scope, observation time, energy estimate, gaps, reconciliation, coexistence with API sessions, charger details, retention, config, lifecycle, occupancies past 48 h) and LIVE-1..4 (event stream, hub, pushed content, page content)
+- [Live mirror plan](docs/superpowers/plans/2026-11-08-live-mirror.md)
 - [AGENTS.md](AGENTS.md): constraints and rules for coding agents
 - [Delivery playbook](docs/playbook.md)
 - [AI review log](docs/ai-review-log.md)
