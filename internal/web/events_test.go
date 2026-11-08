@@ -164,7 +164,7 @@ func TestEvents_LIVE1_StreamMatchesPage(t *testing.T) {
 	e.start("CP-02", sgt(0, 15, 7))
 
 	list := openStream(t, e.srv, "/events?view=list").mustNext("list")
-	if page := e.get("/").Body.String(); !strings.Contains(page, list) {
+	if page := e.get("/sessions").Body.String(); !strings.Contains(page, list) {
 		t.Errorf("LIVE-1: list event is not part of the list page:\nevent: %s\npage: %s", list, page)
 	}
 	detail := openStream(t, e.srv, "/events?view=session&id="+id).mustNext("session")
@@ -647,7 +647,7 @@ func TestEvents_LIVE3_EmptyListFragmentIsNotEmpty(t *testing.T) {
 	e := newStreamEnv(t, 100, nil)
 	first := openStream(t, e.srv, "/events?view=list").mustNext("list")
 	wantContains(t, first, "<tbody>", "No sessions yet")
-	if page := e.get("/").Body.String(); !strings.Contains(page, `<div class="card" data-live="list">`+first) {
+	if page := e.get("/sessions").Body.String(); !strings.Contains(page, `<div class="card" data-live="list">`+first) {
 		t.Errorf("LIVE-3: empty list event is not the content of the swapped element:\nevent: %s\npage: %s", first, page)
 	}
 }
@@ -776,7 +776,7 @@ func TestEvents_LOC7_LocationsView(t *testing.T) {
 	c := openStream(t, e.srv, "/events?view=locations")
 	first := c.mustNext("locations")
 	wantContains(t, first, "<h2>Alpha Mall</h2>", `<li class="cell free" title="A-001 · 22 kW AC · Type 2 · free"></li>`)
-	if page := e.get("/locations").Body.String(); !strings.Contains(page, `<div data-live="locations">`+first) {
+	if page := e.get("/").Body.String(); !strings.Contains(page, `<div data-live="locations">`+first) {
 		t.Errorf("LOC-7: locations event is not the content of the swapped element:\nevent: %s\npage: %s", first, page)
 	}
 	other := openStream(t, e.srv, "/events?view=locations")

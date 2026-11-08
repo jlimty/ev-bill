@@ -4,14 +4,14 @@ A small Go service that bills EV charging sessions on a Singapore peak/off-peak 
 
 The server also mirrors real Singapore chargers: every 5 minutes it reads the occupancy of the watched connectors from LTA DataMall and bills each occupancy as a `mirror` session, with energy estimated at rated power ([Live mirror](#live-mirror)). A Locations page shows how busy each watched site actually is, from observed occupancy, by hour of day ([Locations](#locations)). Every page updates live over Server-Sent Events.
 
-Live: https://ev-billing.onrender.com and https://ev-billing.onrender.com/locations (free tier, see [Deployment](#deployment)).
+Live: https://ev-billing.onrender.com and https://ev-billing.onrender.com/sessions (free tier, see [Deployment](#deployment)).
 
 ## Architecture
 
 ```mermaid
 flowchart TB
     SIM["Chargers<br/>(cmd/simulator)"]
-    BROWSER["Browser<br/>/, /sessions/{id}, /locations"]
+    BROWSER["Browser<br/>/, /sessions, /sessions/{id}"]
     LTA["LTA DataMall<br/>EV charging feed"]
 
     subgraph RENDER["Render web service (cmd/server, one errgroup)"]
@@ -169,7 +169,7 @@ The contract is [`api/openapi.yaml`](api/openapi.yaml); handler tests validate r
 | GET | `/api/sessions` | none | 200 (newest 50) |
 | GET | `/healthz` | none | 200, or 503 if the database ping fails within 2 s |
 
-Status pages: `/` (newest 50), `/sessions/{id}` (segment bar and table) and `/locations` (see [Locations](#locations)). They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 3 s.
+Status pages: `/` (Locations, see [Locations](#locations)), `/sessions` (newest 50) and `/sessions/{id}` (segment bar and table). `/locations` redirects to `/`. They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 30 s.
 
 ## Live mirror
 
@@ -208,7 +208,7 @@ The first poll runs at startup; the feed line on http://localhost:8080/ shows th
 
 ## Locations
 
-`/locations` shows whether public charging at the watched sites is under-used. It has one card per site in the newest feed observation, and updates live over `/events?view=locations`. Rules LOC-1..7 are in the [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md).
+`/` shows whether public charging at the watched sites is under-used. It has one card per site in the newest feed observation, and updates live over `/events?view=locations`. Rules LOC-1..7 are in the [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md).
 
 Observed figures come straight from LTA's occupancy data:
 

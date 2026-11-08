@@ -94,12 +94,12 @@ func card(t *testing.T, body, name string) string {
 	return body[open : start+end]
 }
 
-// LOC-7: GET /locations is public, carries the exact CSP and the one
+// LOC-7, NAV-1: GET / is public, carries the exact CSP and the one
 // same-origin script, opens the locations stream, and the header links the
 // sessions list and the locations page, marking the current one.
 func TestLocations_LOC7_Route(t *testing.T) {
 	e := newEnv(t)
-	rec := e.get("/locations")
+	rec := e.get("/")
 	wantHTML(t, rec, http.StatusOK)
 	const wantCSP = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'"
 	if got := rec.Header().Get("Content-Security-Policy"); got != wantCSP {
@@ -109,15 +109,15 @@ func TestLocations_LOC7_Route(t *testing.T) {
 	wantContains(t, body, liveScript, refreshMeta, `<body data-stream="view=locations">`,
 		`<title>Locations · EV billing</title>`, `<h1>Locations</h1>`,
 		`<div data-live="locations">`,
-		`<nav aria-label="Pages"><a href="/">Sessions</a> · <a href="/locations" aria-current="page">Locations</a></nav>`)
+		`<nav aria-label="Pages"><a href="/" aria-current="page">Locations</a> · <a href="/sessions">Sessions</a></nav>`)
 	if n := strings.Count(body, "<script"); n != 1 {
 		t.Errorf("LOC-7: %d script tags, want only live.js", n)
 	}
 
-	list := e.get("/").Body.String()
-	wantContains(t, list, `<nav aria-label="Pages"><a href="/" aria-current="page">Sessions</a> · <a href="/locations">Locations</a></nav>`)
+	list := e.get("/sessions").Body.String()
+	wantContains(t, list, `<nav aria-label="Pages"><a href="/">Locations</a> · <a href="/sessions" aria-current="page">Sessions</a></nav>`)
 	detail := e.get("/sessions/not-a-uuid").Body.String()
-	wantContains(t, detail, `<nav aria-label="Pages"><a href="/">Sessions</a> · <a href="/locations">Locations</a></nav>`)
+	wantContains(t, detail, `<nav aria-label="Pages"><a href="/">Locations</a> · <a href="/sessions" aria-current="page">Sessions</a></nav>`)
 
 	// live.js swaps the locations event into its element like the others.
 	wantContains(t, e.get("/static/live.js").Body.String(), "source.addEventListener('locations', swap);")
@@ -155,7 +155,7 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 	e.mirrorStopped("C-001", sgt(19, 0, 6), sgt(19, 10, 6), 900)  // before Charlie's first sample: left out (LOC-6)
 	e.mirrorStopped("C-001", sgt(20, 0, 6), sgt(20, 30, 6), 700)  // price n/a
 
-	body := e.get("/locations").Body.String()
+	body := e.get("/").Body.String()
 	// The earliest sample is Bravo's, 400 x 5 min = 33 h 20 min before 00:20
 	// on 7 Nov: 15:00 on 5 Nov. The largest site has 33 h observed.
 	wantContains(t, body,
@@ -213,7 +213,7 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, old)
 		e.observe([]store.ChargerRow{locCharger("C-001", "100003", "Charlie Park", "Testco", datamall.Available)},
 			samplesBack("100003", 12, 1, 1, 0))
-		wantContains(t, e.get("/locations").Body.String(),
+		wantContains(t, e.get("/").Body.String(),
 			`<p class="window">Last 14 days</p>`,
 			`<p class="headline">At Alpha Mall, chargers were busy 25% of the observed time</p>`)
 	})
@@ -221,14 +221,14 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 		e := newEnv(t)
 		smp := store.OccupancySample{PostalCode: "100001", ObservedAt: fixedNow().Add(-locations.Window + fullWindowSlack), Occupied: 1, Available: 1}
 		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, []store.OccupancySample{smp})
-		wantContains(t, e.get("/locations").Body.String(), `<p class="window">Last 14 days</p>`)
+		wantContains(t, e.get("/").Body.String(), `<p class="window">Last 14 days</p>`)
 	})
 	t.Run("just past the slack", func(t *testing.T) {
 		e := newEnv(t)
 		smp := store.OccupancySample{PostalCode: "100001", ObservedAt: fixedNow().Add(-locations.Window + fullWindowSlack + time.Minute), Occupied: 1, Available: 1}
 		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, []store.OccupancySample{smp})
 		// 14 days before 00:20 on 7 Nov is 00:20 on 24 Oct; plus 61 min is 01:21.
-		wantContains(t, e.get("/locations").Body.String(), `<p class="window">Since 24 Oct · 0 h observed</p>`)
+		wantContains(t, e.get("/").Body.String(), `<p class="window">Since 24 Oct · 0 h observed</p>`)
 	})
 	t.Run("collecting", func(t *testing.T) {
 		e := newEnv(t)
@@ -236,7 +236,7 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 			samplesBack("100001", 24, 1, 1, 0)) // 2 h
 		e.observe([]store.ChargerRow{locCharger("C-001", "100003", "Charlie Park", "Testco", datamall.Available)},
 			samplesBack("100003", 60, 1, 1, 0)) // 5 h
-		body := e.get("/locations").Body.String()
+		body := e.get("/").Body.String()
 		wantContains(t, body, `<p class="headline">Collecting data · 5 h observed so far</p>`,
 			`<p class="window">Since 6 Nov · 5 h observed</p>`, `<p class="note">collecting data · 2 h</p>`)
 	})
@@ -246,7 +246,7 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 		// LOC-6: with no sample the site has no window yet, so this session
 		// is not counted next to "0 h".
 		e.mirrorStopped("A-001", sgt(22, 0, 6), sgt(22, 30, 6), 2500)
-		body := e.get("/locations").Body.String()
+		body := e.get("/").Body.String()
 		wantContains(t, body, `<p class="headline">Collecting data · 0 h observed so far</p>`,
 			`<span class="pct">n/a</span>`, `<p class="note">collecting data · 0 h</p>`,
 			`<p class="facts">0 billing sessions · est. 0.0 kWh · est. $0.00 at today&#39;s posted price</p>`)
@@ -272,7 +272,7 @@ func TestLocations_LOC5_CellsAndCount(t *testing.T) {
 	small = append(small, chargersWith(1, "S9", "100002", "Small Park", datamall.Available, 4)...)
 	e.observe(small, nil)
 
-	body := e.get("/locations").Body.String()
+	body := e.get("/").Body.String()
 	bigCard := card(t, body, "Big Mall")
 	wantContains(t, bigCard, `<ul class="cells" aria-hidden="true">`, `<p class="count">9 busy · 17 free · 2 out</p>`,
 		`<li class="cell busy" title="R123-001 · 50 kW DC · CCS2 · busy"></li>`,
@@ -324,7 +324,7 @@ func TestLocations_LOC5_StaleIsMuted(t *testing.T) {
 			rows := chargersWith(3, "S9", "100002", "Small Park", datamall.Occupied, 1)
 			rows = append(rows, chargersWith(1, "S9", "100002", "Small Park", datamall.Available, 4)...)
 			e.observe(rows, nil)
-			body := e.get("/locations").Body.String()
+			body := e.get("/").Body.String()
 			wantContains(t, body, tc.line)
 			if tc.muted {
 				wantContains(t, body, `<ul class="cells muted" aria-hidden="true">`, `<p class="count">as of 00:18 · 3 busy · 1 free</p>`)
@@ -349,15 +349,15 @@ func TestLocations_LOC5_AsOfDate(t *testing.T) {
 		count    string
 	}{
 		{"today", sgt(0, 0, 7), `<p class="count">as of 00:00 · 1 busy · 0 free</p>`},
-		{"yesterday", sgt(23, 59, 6), `<p class="count">as of 06 Nov 2026 23:59 · 1 busy · 0 free</p>`},
-		{"days ago", sgt(13, 20, 3), `<p class="count">as of 03 Nov 2026 13:20 · 1 busy · 0 free</p>`},
+		{"yesterday", sgt(23, 59, 6), `<p class="count">as of 06 Nov 23:59 · 1 busy · 0 free</p>`},
+		{"days ago", sgt(13, 20, 3), `<p class="count">as of 03 Nov 13:20 · 1 busy · 0 free</p>`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
 			row := locCharger("S9-001", "100002", "Small Park", "Testco", datamall.Occupied)
 			row.ObservedAt = tc.observed
 			e.observe([]store.ChargerRow{row}, nil)
-			wantContains(t, e.get("/locations").Body.String(), `<ul class="cells muted" aria-hidden="true">`, tc.count)
+			wantContains(t, e.get("/").Body.String(), `<ul class="cells muted" aria-hidden="true">`, tc.count)
 		})
 	}
 }
@@ -375,7 +375,7 @@ func TestLocations_LOC5_EmptyOperator(t *testing.T) {
 	mixed[0].Operator = ""
 	e.observe(mixed, nil)
 
-	body := e.get("/locations").Body.String()
+	body := e.get("/").Body.String()
 	wantContains(t, card(t, body, "Nameless"), `<p class="sub">20 connectors</p>`)
 	wantContains(t, card(t, body, "Mixed"), `<p class="sub">Testco · 2 connectors</p>`)
 }
@@ -387,7 +387,7 @@ func TestLocations_LOC2_UtilReadsAsWords(t *testing.T) {
 	e := newEnv(t)
 	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)},
 		samplesBack("100001", 300, 1, 3, 0))
-	c := card(t, e.get("/locations").Body.String(), "Alpha Mall")
+	c := card(t, e.get("/").Body.String(), "Alpha Mall")
 	start := strings.Index(c, `<p class="util">`)
 	end := strings.Index(c[max(start, 0):], `</p>`)
 	if start < 0 || end < 0 {
@@ -421,7 +421,7 @@ func TestLocations_LOC3_Strip(t *testing.T) {
 			at(6, 12, 0, 0, 0),  // hour 12: sampled, but no capacity: n/a, not 0%
 		})
 
-	body := card(t, e.get("/locations").Body.String(), "Alpha Mall")
+	body := card(t, e.get("/").Body.String(), "Alpha Mall")
 	if n := strings.Count(body, `<li class="hour `); n != 24 {
 		t.Fatalf("LOC-3: %d hour bars, want 24", n)
 	}
@@ -457,16 +457,16 @@ func TestLocations_LOC3_Strip(t *testing.T) {
 // live.js swaps is there either way.
 func TestLocations_LOC7_Empty(t *testing.T) {
 	e := newEnv(t)
-	body := e.get("/locations").Body.String()
-	wantContains(t, body, `<div data-live="locations">`, `<p class="empty">Live mirror off · no location data yet</p>`)
+	body := e.get("/").Body.String()
+	wantContains(t, body, `<div data-live="locations">`, `<p class="empty">Live mirror off · no location data yet. <a href="/sessions">See sessions →</a></p>`)
 	if strings.Contains(body, `<p class="feed`) || strings.Contains(body, `class="headline"`) {
 		t.Errorf("LOC-7: empty state repeats the feed line or a headline: %s", body)
 	}
 
 	e.p.Feed = feedState(live.FeedState{Enabled: true})
-	wantContains(t, e.get("/locations").Body.String(), `<p class="empty">Waiting for the first live update</p>`)
+	wantContains(t, e.get("/").Body.String(), `<p class="empty">Waiting for the first live update. <a href="/sessions">See sessions →</a></p>`)
 	e.p.Feed = feedState(live.FeedState{Enabled: true, LastError: "boom"})
-	wantContains(t, e.get("/locations").Body.String(), `<p class="empty warn">Live feed unavailable · no successful update yet</p>`)
+	wantContains(t, e.get("/").Body.String(), `<p class="empty warn">Live feed unavailable · no successful update yet. <a href="/sessions">See sessions →</a></p>`)
 }
 
 // LOC-7: the legend explains every cell state and tariff colour in text, not
@@ -474,7 +474,7 @@ func TestLocations_LOC7_Empty(t *testing.T) {
 func TestLocations_LOC7_LegendAndNotice(t *testing.T) {
 	e := newEnv(t)
 	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, nil)
-	body := e.get("/locations").Body.String()
+	body := e.get("/").Body.String()
 	wantContains(t, body,
 		`<li><span class="cell busy"></span>busy</li>`,
 		`<li><span class="cell free"></span>free</li>`,
@@ -492,7 +492,7 @@ func TestLocations_LOC7_LegendAndNotice(t *testing.T) {
 func TestLocations_LOC7_StoreFailureIs500(t *testing.T) {
 	e := newEnv(t)
 	e.pool.Close()
-	rec := e.get("/locations")
+	rec := e.get("/")
 	wantHTML(t, rec, http.StatusInternalServerError)
 	wantContains(t, rec.Body.String(), "Something went wrong")
 	if !strings.Contains(e.logs.String(), "location scope") {
@@ -504,14 +504,24 @@ func TestLocations_LOC7_StoreFailureIs500(t *testing.T) {
 	if _, err := e.pool.Exec(context.Background(), "DROP TABLE occupancy_samples"); err != nil {
 		t.Fatal(err)
 	}
-	wantHTML(t, e.get("/locations"), http.StatusInternalServerError)
+	wantHTML(t, e.get("/"), http.StatusInternalServerError)
 
 	// With the mirror on, the feed line's held count is read first.
 	e = newEnv(t)
 	e.p.Feed = feedState(live.FeedState{Enabled: true})
 	e.pool.Close()
-	wantHTML(t, e.get("/locations"), http.StatusInternalServerError)
+	wantHTML(t, e.get("/"), http.StatusInternalServerError)
 	if !strings.Contains(e.logs.String(), "held count") {
 		t.Errorf("cause not logged: %q", e.logs.String())
 	}
+}
+
+// NAV-1: every Locations empty state links to the sessions list, with the
+// mirror off and with the mirror on but no poll yet.
+func TestLocations_NAV1_EmptyStatesLink(t *testing.T) {
+	const link = `<a href="/sessions">See sessions →</a>`
+	e := newEnv(t)
+	wantContains(t, e.get("/").Body.String(), link)
+	e.p.Feed = feedState(live.FeedState{Enabled: true})
+	wantContains(t, e.get("/").Body.String(), link)
 }

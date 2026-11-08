@@ -65,9 +65,10 @@ type Pages struct {
 // Register mounts the pages on mux. The event stream is mounted separately,
 // by RegisterEvents, so it can sit outside the per-request deadline.
 func (p *Pages) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /{$}", p.list)
+	mux.HandleFunc("GET /{$}", p.locations)
+	mux.HandleFunc("GET /sessions", p.list)
 	mux.HandleFunc("GET /sessions/{id}", p.detail)
-	mux.HandleFunc("GET /locations", p.locations)
+	mux.HandleFunc("GET /locations", p.locationsRedirect)
 	mux.HandleFunc("GET /static/live.js", p.liveJS)
 }
 
@@ -75,7 +76,7 @@ func (p *Pages) Register(mux *http.ServeMux) {
 // GET /events, such as "view=list"; it is empty on pages that do not update,
 // which then load no script and do not refresh (LIVE-3). Nav names the header
 // link of the current page, navSessions or navLocations, which gets
-// aria-current="page"; it is empty on other pages (LOC-7).
+// aria-current="page"; it is empty on other pages (NAV-1).
 type layoutData struct {
 	Title  string
 	Stream string
@@ -139,7 +140,7 @@ type errorPage struct {
 }
 
 func (p *Pages) layout(title, stream string) layoutData {
-	return layoutData{Title: title, Stream: stream, Tariff: tariffHeader(p.Tariff), TZ: p.Tariff.Location.String()}
+	return layoutData{Title: title, Stream: stream, Tariff: tariffHeader(p.Tariff), TZ: zoneCity(p.Tariff.Location) + " time"}
 }
 
 const (
@@ -204,7 +205,7 @@ func chargerPower(c *store.ChargerRow) string {
 func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
 	data, err := p.listData(r.Context())
 	if err != nil {
-		p.serverError(w, r, "list page", err)
+		p.serverError(w, r, navSessions, "list page", err)
 		return
 	}
 	p.render(w, r, http.StatusOK, "list", data)
@@ -315,15 +316,17 @@ func joinNonEmpty(sep string, parts ...string) string {
 func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 	data, err := p.detailData(r.Context(), r.PathValue("id"))
 	if errors.Is(err, sessions.ErrNotFound) {
+		notFound := p.layout("Not found", "")
+		notFound.Nav = navSessions
 		p.render(w, r, http.StatusNotFound, "error", errorPage{
-			layoutData: p.layout("Not found", ""),
+			layoutData: notFound,
 			Heading:    "Session not found",
 			Message:    "That charging session does not exist.",
 		})
 		return
 	}
 	if err != nil {
-		p.serverError(w, r, "detail page", err)
+		p.serverError(w, r, navSessions, "detail page", err)
 		return
 	}
 	p.render(w, r, http.StatusOK, "detail", data)
@@ -356,6 +359,7 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 		Total:      FormatCents(v.Bill.TotalCents),
 		Legend:     barLegend{Peak: peakLegend(p.Tariff), OffPeak: offPeakLegend(p.Tariff)},
 	}
+	data.Nav = navSessions
 	if sess.StoppedAt != nil {
 		data.Stopped = p.clock(*sess.StoppedAt, true)
 	}
@@ -388,13 +392,21 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 	return data, nil
 }
 
-// clock formats t in the tariff's location: "HH:MM", or "DD Mon YYYY HH:MM" with a date.
+// clock formats t in the tariff's location: "HH:MM", or with a date "02 Jan
+// 15:04" in the current year there and "02 Jan 2006 15:04" in any other
+// (VIEW-8). The current year is read in the same location, so the answer does
+// not depend on the host's timezone.
 func (p *Pages) clock(t time.Time, withDate bool) string {
+	loc := p.Tariff.Location
+	local := t.In(loc)
 	layout := "15:04"
 	if withDate {
 		layout = "02 Jan 2006 15:04"
+		if local.Year() == p.Now().In(loc).Year() {
+			layout = "02 Jan 15:04"
+		}
 	}
-	return t.In(p.Tariff.Location).Format(layout)
+	return local.Format(layout)
 }
 
 // lasts24h reports whether the segments cover 24 hours or more. Only then can
@@ -432,11 +444,14 @@ func windowLabel(w billing.Window) (label, class string) {
 	return "Off-peak", "offpeak"
 }
 
-// serverError logs the real error and shows a generic page.
-func (p *Pages) serverError(w http.ResponseWriter, r *http.Request, what string, err error) {
+// serverError logs the real error and shows a generic page. nav is the header
+// link the error page marks as current, or "" for none (NAV-1).
+func (p *Pages) serverError(w http.ResponseWriter, r *http.Request, nav, what string, err error) {
 	reqid.Logger(r.Context(), p.Logger).Error("status page failed", "op", what, "error", err)
+	data := p.layout("Error", "")
+	data.Nav = nav
 	p.render(w, r, http.StatusInternalServerError, "error", errorPage{
-		layoutData: p.layout("Error", ""),
+		layoutData: data,
 		Heading:    "Something went wrong",
 		Message:    "Please try again in a moment.",
 	})

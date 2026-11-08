@@ -76,7 +76,7 @@ func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 	page, expect := openBrowser(t)
 
 	// UI-1: the list shows each session's status badge and cost.
-	_, err = page.Goto(srv.URL + "/")
+	_, err = page.Goto(srv.URL + "/sessions")
 	must(t, "open list", err)
 	doneRow := page.Locator("tbody tr").Filter(playwright.LocatorFilterOptions{HasText: "CP-01"})
 	must(t, "CP-01 badge", expect.Locator(doneRow.Locator(".badge")).ToHaveText("completed"))
@@ -243,7 +243,7 @@ func TestStatusPages_LIVE3_UpdatesWithoutReload(t *testing.T) {
 	srv, hub := startServer(t, st)
 	page, expect := openBrowser(t)
 
-	_, err := page.Goto(srv.URL + "/")
+	_, err := page.Goto(srv.URL + "/sessions")
 	must(t, "open list", err)
 	must(t, "empty list", expect.Locator(page.Locator("tbody")).ToContainText("No sessions yet"))
 	// Wait until the stream is open and its first event applied, so the row
@@ -412,7 +412,7 @@ func TestLocations_LOC7_UpdatesWithoutReload(t *testing.T) {
 	page, expect := openBrowser(t)
 	must(t, "phone viewport", page.SetViewportSize(375, 812))
 
-	_, err := page.Goto(srv.URL + "/locations")
+	_, err := page.Goto(srv.URL + "/")
 	must(t, "open locations", err)
 	// The page fits a phone: nothing, the hidden hourly table included, makes it scroll sideways.
 	width, err := page.Evaluate("() => document.documentElement.scrollWidth")
