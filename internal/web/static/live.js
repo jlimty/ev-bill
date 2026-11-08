@@ -1,7 +1,7 @@
 // live.js keeps a status page current without reloading it (LIVE-3). It opens
-// the stream named by <body data-stream> and puts each "list" or "session"
-// event's data (HTML rendered and escaped by html/template, from this origin)
-// into the matching [data-live] element. <body data-stream-state> says
+// the stream named by <body data-stream> and puts each "list", "locations" or
+// "session" event's data (HTML rendered and escaped by html/template, from
+// this origin) into the matching [data-live] element. <body data-stream-state> says
 // "connected" once an event is applied, "done" once the server says the
 // session is completed, and "closed" if the stream gives up.
 (function () {
@@ -15,6 +15,7 @@
     body.dataset.streamState = 'connected';
   }
   source.addEventListener('list', swap);
+  source.addEventListener('locations', swap);
   source.addEventListener('session', swap);
   // A completed session will not change again: the server sends "done" after
   // its last fragment and ends the stream, so stop here, with no reload.

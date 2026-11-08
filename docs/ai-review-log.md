@@ -36,10 +36,11 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 30 | 2026-11-08 | Mirror Task 3 / process | Tests were written together with the code, skipping the failing-first run the plan asked for | implementer's own report | None needed; the review checks tests against the rules | None |
 | 31 | 2026-11-08 | Mirror Tasks 5–6 / LIVE-1, LIVE-2 | Every open stream re-rendered the page on every signal, with no sharing or throttle; at the 100-stream cap one 30 s tick cost about 1.3 CPU-s locally, enough to starve a 0.1 CPU free instance and its 10-connection pool | review (whole-branch) | One shared render per view per hub generation, a 2 s minimum gap per stream, and at most 2 renders at once | Tests: 100 streams give 1 render; a 50-signal burst gives at most 2 renders per stream |
 | 32 | 2026-11-08 | Mirror Task 2 / MIR-1 | The parser fully decoded all ~2,800 feed locations before filtering, so one wrong-typed field at any unwatched location would have failed every poll | review (whole-branch) | Only watched locations are fully decoded; a malformed watched location skips its connectors | Test: a numeric field at an unwatched location no longer fails the poll |
+| 33 | 2026-11-08 | Locations Task 3 / LOC-3 | The local test database's Postgres TimeZone defaults to Asia/Singapore, which hid a missing `AT TIME ZONE` in the hour bucketing | implementer's own mutation testing | The LOC-3 test sets the session TimeZone to UTC and America/New_York itself | Test |
 
 ## Tally
 
-Rows counted by the "Caught by" column (32 rows):
+Rows counted by the "Caught by" column (33 rows):
 
 | Caught by | Rows | Count |
 |---|---|---|
@@ -48,9 +49,10 @@ Rows counted by the "Caught by" column (32 rows):
 | sonar | 4, 8, 19, 20 | 4 |
 | scan (pre-flight scan of the plan) | 29 | 1 |
 | implementer's own report | 30 | 1 |
+| implementer's own mutation testing | 33 | 1 |
 | test, lint, mutation | none | 0 |
 
-Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30). Rows 3, 14, 17, 29 and 30 are "none" decisions; 14, 17, 29 and 30 give a reason or note, 3 does not.
+Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32, 33), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30). Rows 3, 14, 17, 29 and 30 are "none" decisions; 14, 17, 29 and 30 give a reason or note, 3 does not.
 
 ## Mutation baseline
 

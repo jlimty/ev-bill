@@ -1,0 +1,31 @@
+{{define "locations_body"}}{{if .Empty.Text}}<p class="empty{{if .Empty.Warn}} warn{{end}}">{{.Empty.Text}}</p>
+{{else}}{{with .Window}}<p class="window">{{.}}</p>
+{{end}}<p class="feed{{if .Feed.Warn}} warn{{end}}">{{.Feed.Text}}</p>
+<p class="headline">{{.Headline}}</p>
+{{range .Sites}}<article class="site">
+<div class="head">
+<div><h2>{{.Name}}</h2><p class="sub">{{.Sub}}</p></div>
+<p class="util"><span class="pct">{{.Util}}</span>{{if .Observed}}<span class="label">observed</span>{{end}}</p>
+</div>
+<ul class="cells{{if .Muted}} muted{{end}}" aria-hidden="true">
+{{range .Cells}}<li class="cell {{.Class}}" title="{{.Title}}"></li>
+{{end}}</ul>
+<p class="count">{{.Count}}</p>
+<div class="profile">
+<p class="sub caption" aria-hidden="true">Busy by hour of day · observed</p>
+<ol class="strip" aria-hidden="true">
+{{range .Hours}}<li class="hour {{.Class}}"{{with .Height}} style="height:{{.}}%"{{end}} title="{{.Title}}"></li>
+{{end}}</ol>
+<div class="ticks" aria-hidden="true"><span class="t00">00</span><span class="t06">06</span><span class="t12">12</span><span class="t18">18</span><span class="t23">23</span></div>
+<div class="vh"><table>
+<caption>{{.Name}}: observed utilization by hour of day</caption>
+<thead><tr><th scope="col">Hour</th><th scope="col">Busy</th><th scope="col">Window</th></tr></thead>
+<tbody>
+{{range .Hours}}<tr><th scope="row">{{.Span}}</th><td>{{.Value}}</td><td>{{.Window}}</td></tr>
+{{end}}</tbody>
+</table></div>
+</div>
+<p class="facts">{{.Facts}}</p>
+{{with .Collecting}}<p class="note">{{.}}</p>
+{{end}}</article>
+{{end}}{{end}}{{end}}
