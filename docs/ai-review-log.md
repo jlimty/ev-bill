@@ -12,20 +12,17 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 6 | 2026-11-08 | Task 3 / BIL-6 | `Split` accepted negative meter values, so `b.MeterWh − a.MeterWh` could wrap and return negative segment energy with no error | review | Reject any negative meter value with `ErrNegativeMeter` | Test with the overflowing pair; fuzz no longer starts every meter at 0 |
 | 7 | 2026-11-08 | Task 3 / BIL-4 | The test for "a reading on a boundary makes no empty segment" still passed with an inclusive cut, because merging hid the empty pieces | review (manual mutation) | Added cases where the first or last reading sits exactly on a boundary | Test; Task 4's mutation report covers the rest |
 | 8 | 2026-11-08 | Task 1 / CI | CI installed govulncheck with `go install pkg@version`, which Sonar flags as an unlocked dependency, and downloaded gitleaks with `curl -L` without restricting redirects to HTTPS | sonar | Tools pinned as `tool` directives in go.mod and run with `go tool`; curl restricted to HTTPS | Sonar rules `githubactions:S8545` and `S6506` stay in the quality gate |
+| 9 | 2026-11-08 | Task 5 / SES-3, BIL-3 | The plan allowed a stop that repeats the last reading (10:10/300 after reading 10:10/300), which would hand `Compute` two equal timestamps and make the session's bill error | review | `Timeline` drops a point identical to the one before it | Test, directly and through `BuildView` |
+| 10 | 2026-11-08 | Task 5 / BIL-5 | Nothing bounded meter values, and `SegmentCost` overflows int64 near 1.5×10¹⁷ Wh. New rule beyond the spec: meters above 10¹⁵ Wh are rejected with 422 `invalid_reading` | review | `MaxMeterWh` checked in `CheckStart`, `CheckReading` and `CheckStop` | Boundary tests (10¹⁵ accepted, 10¹⁵+1 rejected) in all three |
+| 11 | 2026-11-08 | Task 5 / BIL-6 | A refactor of `Split`'s validation, made to remove equivalent mutants, changed which error is reported when an input has two faults, and the log claimed no behaviour change | review | Restored first-fault-wins order in one loop | Test pinning the first-fault order |
+| 12 | 2026-11-08 | Task 5 / SES-2, SES-3 | The tests did not fix the order of the session checks that decide 409 against 422 (stopped first, same instant before neighbour checks); moving a check left the suite green | review (manual mutation) | Ordering tests for each pair of rules that can both apply | Test |
 
 ## Mutation baseline
 
-2026-11-08, gremlins v0.6.0, `make mutation` on `internal/billing` (Tasks 3 and 4 code):
+2026-11-08, gremlins v0.6.0, `make mutation` on `internal/billing` (Tasks 3 and 4 code, after the Task 5 cleanup of `Split`):
 
-- Killed 43, lived 3, not covered 0, timed out 1.
-- Test efficacy 93.48% (killed / (killed + lived)); Mutator coverage 100.00%.
-- The timed-out mutant is `d++` to `d--` in `boundariesBetween` (`split.go:108`). The loop never ends, so the timeout is the test noticing it; it counts as caught.
+- Killed 43, lived 0, not covered 0, timed out 1.
+- Test efficacy 100.00% (killed / (killed + lived)); Mutator coverage 100.00%.
+- The timed-out mutant is `d++` to `d--` in `boundariesBetween` (`split.go:110`). The loop never ends, so the timeout is the test noticing it; it counts as caught.
 - `make mutation` passes `--timeout-coefficient 50`. With gremlins' default every mutant timed out and the score read 0%, because the suite runs faster than one compile.
-
-Lived mutants, none worth a test:
-
-| Mutant | Location | Why it is not killed |
-|---|---|---|
-| `CONDITIONALS_BOUNDARY` (`i > 0` to `i >= 0`) | `split.go:46` | Equivalent for valid input. It differs only for a first reading at the zero time (`time.Time{}`, what a missing JSON timestamp decodes to): the mutant returns `ErrReadingsNotIncreasing` where the original accepts it. API validation in a later task rejects a zero timestamp. |
-| `INVERT_NEGATIVES` (`len(bounds)-1` to `len(bounds)+1`) | `split.go:78` | Only the capacity hint of `make([]Segment, 0, n)`. The slice contents are identical. Equivalent. |
-| `ARITHMETIC_BASE` (`len(bounds)-1` to `len(bounds)+1`) | `split.go:78` | Same capacity hint. Equivalent. |
+- The previous run left 3 lived, equivalent mutants (the `i > 0` guard and the `make` capacity hint in `Split`). Task 5 removed them: the validation loop now skips the first reading with `if i == 0 { …; continue }` instead of guarding with `i > 0`, and the capacity hint is gone. Behaviour is unchanged; the first faulty reading still decides the error, which `TestSplit_BIL6_FirstFaultWins` pins.
