@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-# The job ids (lint, test, vuln, secrets) are the check names that branch
+# The job ids (lint, test, sonar, vuln, secrets) are the check names that branch
 # protection requires. Do not rename them or add a `name:` to a job.
 jobs:
   lint:
@@ -20,7 +20,7 @@ jobs:
           go-version: stable
       - run: make fmt-check
       - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15
 
@@ -47,11 +47,28 @@ jobs:
         with:
           go-version: stable
       - run: make test test-tz
-      # Task 2 downloads this artifact for SonarQube.
+      # The sonar job downloads this artifact.
       - uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
+
+  sonar:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 gives Sonar the history it uses to find new code.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: coverage
+      # Third-party actions are pinned to a full commit SHA (Sonar rule
+      # githubactions:S7637). Dependabot still updates the SHA and the comment.
+      - uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   vuln:
     runs-on: ubuntu-latest
