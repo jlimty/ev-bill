@@ -78,27 +78,33 @@ func (s *Store) CreateSession(ctx context.Context, chargerID string, startedAt t
 	return sess, nil
 }
 
-// AddReading stores a meter reading (SES-2, SES-6). The session row is locked
+// AddReading stores a meter reading (SES-2, SES-6) and returns the session with
+// its readings as of the end of the same transaction. The session row is locked
 // for the transaction, so concurrent calls for one session run one at a time
 // and an identical repeat is reported as duplicate, not stored twice.
-func (s *Store) AddReading(ctx context.Context, id string, r billing.Reading, now time.Time) (duplicate bool, err error) {
+func (s *Store) AddReading(ctx context.Context, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error) {
 	id, ok := parseUUID(id)
 	if !ok {
-		return false, sessions.ErrNotFound
+		return sessions.Session{}, nil, false, sessions.ErrNotFound
 	}
 	r.At = norm(r.At)
 
-	err = s.inTx(ctx, func(tx pgx.Tx) error {
-		sess, readings, err := lockSession(ctx, tx, id)
+	var (
+		out       sessions.Session
+		readings  []billing.Reading
+		duplicate bool
+	)
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		sess, rs, err := lockSession(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		dup, err := sessions.CheckReading(sess, readings, r, now)
+		dup, err := sessions.CheckReading(sess, rs, r, now)
 		if err != nil {
 			return err
 		}
+		out, readings, duplicate = sess, rs, dup
 		if dup {
-			duplicate = true
 			return nil
 		}
 		if _, err := tx.Exec(ctx,
@@ -109,12 +115,13 @@ func (s *Store) AddReading(ctx context.Context, id string, r billing.Reading, no
 			}
 			return fmt.Errorf("insert reading: %w", err)
 		}
-		return nil
+		readings, err = loadReadings(ctx, tx, id)
+		return err
 	})
 	if err != nil {
-		return false, ruleOrWrap(err, "add reading")
+		return sessions.Session{}, nil, false, ruleOrWrap(err, "add reading")
 	}
-	return duplicate, nil
+	return out, readings, duplicate, nil
 }
 
 // StopSession stops a session (SES-3). Repeating the identical stop returns

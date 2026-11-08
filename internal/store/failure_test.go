@@ -31,7 +31,7 @@ func storeOps() []storeOp {
 			return err
 		}},
 		{"AddReading", func(c context.Context, s *store.Store, id string) error {
-			_, err := s.AddReading(c, id, r, now)
+			_, _, _, err := s.AddReading(c, id, r, now)
 			return err
 		}},
 		{"StopSession", func(c context.Context, s *store.Store, id string) error {
@@ -115,7 +115,7 @@ func TestStoreFailures_API2_BrokenSchema(t *testing.T) {
 			pool := testdb.New(t)
 			id := liveSession(t, pool)
 			// A second reading so ListRecent has a session to load readings for.
-			if _, err := store.New(pool).AddReading(ctx(), id, billing.Reading{At: at(10, 1, 0, 0), MeterWh: 1}, now); err != nil {
+			if _, _, _, err := store.New(pool).AddReading(ctx(), id, billing.Reading{At: at(10, 1, 0, 0), MeterWh: 1}, now); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := pool.Exec(ctx(), "DROP TABLE "+tc.drop); err != nil {
