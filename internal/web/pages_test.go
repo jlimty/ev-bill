@@ -445,6 +445,25 @@ func TestList_LIVE4_FeedLine(t *testing.T) {
 	}
 }
 
+// LIVE-4: when no poll has ever succeeded and the last one failed (a wrong
+// key, or DataMall down at startup), the line is a warning rather than
+// "waiting" forever, and the error's own text never reaches the page.
+func TestList_LIVE4_FeedLineUnavailable(t *testing.T) {
+	e := newEnv(t)
+	const cause = "datamall: GET https://example.test/ltaodataservice/EVCBatch: status 401"
+	e.p.Feed = feedState(live.FeedState{Enabled: true, LastError: cause})
+	body := e.get("/").Body.String()
+	wantContains(t, body, `<p class="feed warn">Live feed unavailable · no successful update yet</p>`)
+	if strings.Contains(body, "Waiting for the first live update") || strings.Contains(body, "status 401") || strings.Contains(body, "example.test") {
+		t.Errorf("LIVE-4: unavailable feed shows waiting or the error text: %s", body)
+	}
+
+	// Once a poll has succeeded, a later failure leaves the line on the last
+	// good update; it turns into a warning only when that is over 15 min old.
+	e.p.Feed = feedState(live.FeedState{Enabled: true, LastGood: fixedNow().Add(-2 * time.Minute), LastError: cause})
+	wantContains(t, e.get("/").Body.String(), `<p class="feed">Live from LTA DataMall · last update 00:18 (2 min ago)</p>`)
+}
+
 // LIVE-4, MIR-12: connectors held after a 48 h stop are counted at the end of
 // the feed line, in the singular for one.
 func TestList_LIVE4_FeedLineHeld(t *testing.T) {
@@ -533,9 +552,12 @@ func TestStatic_LIVE3_LiveJS(t *testing.T) {
 	}
 	js := rec.Body.String()
 	wantContains(t, js, "EventSource", "/events?",
-		// A closed stream reloads the page once after 30 s, through a function
-		// passed to setTimeout, never a string (which would be eval).
-		"source.readyState !== EventSource.CLOSED", "setTimeout(function () { location.reload(); }, 30000)")
+		// A closed stream reloads the page once after 30 s plus up to 15 s of
+		// jitter, through a function passed to setTimeout, never a string
+		// (which would be eval). A done event closes the stream with no reload.
+		"source.readyState !== EventSource.CLOSED",
+		"setTimeout(function () { location.reload(); }, 30000 + Math.floor(Math.random() * 15000))",
+		"addEventListener('done'", "source.close()")
 	for _, banned := range []string{"eval(", "Function(", "document.write", "setAttribute('on", ".onclick", "setTimeout('", `setTimeout("`} {
 		if strings.Contains(js, banned) {
 			t.Errorf("LIVE-3: live.js contains %q", banned)

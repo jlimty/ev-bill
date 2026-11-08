@@ -57,6 +57,8 @@ type Pages struct {
 	Logger *slog.Logger
 	Hub    *live.Hub
 	Feed   *live.Feed
+
+	renders renderCache // shares stream renders between viewers (LIVE-1)
 }
 
 // Register mounts the pages on mux. The event stream is mounted separately,
@@ -239,7 +241,8 @@ func (p *Pages) listData(ctx context.Context) (listPage, error) {
 }
 
 // feedLine builds the mirror's status line (LIVE-4): off, waiting for the
-// first good poll, live, or delayed once the last good poll is more than
+// first good poll, unavailable when no poll has succeeded and the last one
+// failed, live, or delayed once the last good poll is more than
 // feedDelayedAfter old, plus the connectors held after a 48 h stop (MIR-12).
 func (p *Pages) feedLine(ctx context.Context, now time.Time) (feedLine, error) {
 	var st live.FeedState
@@ -255,6 +258,10 @@ func (p *Pages) feedLine(ctx context.Context, now time.Time) (feedLine, error) {
 	}
 	var line feedLine
 	switch age := now.Sub(st.LastGood); {
+	case st.LastGood.IsZero() && st.LastError != "":
+		// No poll has succeeded yet and the last one failed (a wrong key, or
+		// DataMall down at startup). The error's text is for the log only.
+		line = feedLine{Text: "Live feed unavailable · no successful update yet", Warn: true}
 	case st.LastGood.IsZero():
 		line.Text = "Waiting for the first live update"
 	case age > feedDelayedAfter:

@@ -24,11 +24,18 @@ const (
 	eventWriteTimeout = 10 * time.Second
 	// renderTimeout bounds the database work behind each event, as the
 	// per-request deadline does for the pages, which the stream sits outside.
+	// It includes the wait for a render slot (maxConcurrentRenders).
 	renderTimeout = 8 * time.Second
+	// renderGap is the shortest time between two renders for one stream
+	// (LIVE-1). Signals that arrive within it become one update when it
+	// ends, so a burst of writes costs each viewer at most two renders. The
+	// first event on connect is not delayed.
+	renderGap = 2 * time.Second
 )
 
-// fragmentFunc renders the HTML fragment one stream sends.
-type fragmentFunc func(context.Context) ([]byte, error)
+// doneFrame tells live.js that a completed session will not change again, so
+// it closes the stream rather than reconnecting (LIVE-1).
+const doneFrame = "event: done\ndata: 1\n\n"
 
 // RegisterEvents mounts GET /events on mux (LIVE-1). The caller mounts it
 // outside the per-request deadline, which would otherwise end the stream.
@@ -38,7 +45,10 @@ func (p *Pages) RegisterEvents(mux *http.ServeMux) {
 
 // events serves GET /events?view=list and GET /events?view=session&id=<uuid>
 // as a server-sent event stream: the current fragment straight away, then a
-// re-rendered one after each hub signal, and a heartbeat when idle (LIVE-1).
+// re-rendered one after hub signals, at most one per renderGap, and a
+// heartbeat when idle (LIVE-1). Renders are shared between the streams on one
+// view through p.renders. A HEAD request (which "GET /events" also matches)
+// gets the stream's headers and no body, and holds no stream slot.
 func (p *Pages) events(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	if p.Hub == nil {
@@ -48,19 +58,26 @@ func (p *Pages) events(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query()
 	view := q.Get("view")
+	var key string
 	var render fragmentFunc
 	switch view {
 	case "list":
-		render = p.listFragment
+		key, render = "list", p.listFragment
 	case "session":
 		id := q.Get("id")
 		if id == "" {
 			http.Error(w, "The session view needs an id.", http.StatusBadRequest)
 			return
 		}
-		render = func(ctx context.Context) ([]byte, error) { return p.detailFragment(ctx, id) }
+		key = "session:" + id
+		render = func(ctx context.Context) (fragment, error) { return p.detailFragment(ctx, id) }
 	default:
 		http.Error(w, "Unknown view.", http.StatusBadRequest)
+		return
+	}
+	if r.Method == http.MethodHead {
+		setStreamHeaders(w)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
@@ -72,8 +89,13 @@ func (p *Pages) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cancel()
+	release := p.renders.hold(key)
+	defer release()
 
-	first, err := renderWithin(r.Context(), render)
+	// The first event may reuse a render of the current generation made
+	// within renderGap, so viewers arriving together share one render, but
+	// not an older one: the page it lands on was rendered just now.
+	first, err := p.cachedRender(key, renderGap, render)(r.Context())
 	if errors.Is(err, sessions.ErrNotFound) {
 		http.Error(w, "Session not found.", http.StatusNotFound)
 		return
@@ -83,32 +105,48 @@ func (p *Pages) events(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Something went wrong.", http.StatusInternalServerError)
 		return
 	}
-	p.stream(w, r, view, sub, first, render)
+	p.stream(w, r, view, sub, first, p.cachedRender(key, 0, render))
 }
 
-// stream writes first as an event, then one event per signal on sub and a
-// heartbeat after each idle heartbeatEvery. It returns when sub is closed (the
-// hub stopped, which is what lets http.Server.Shutdown finish, since Shutdown
-// does not cancel request contexts), when the request context is done, or
-// when an event cannot be rendered or delivered.
-func (p *Pages) stream(w http.ResponseWriter, r *http.Request, event string, sub <-chan struct{}, first []byte, render fragmentFunc) {
-	log := reqid.Logger(r.Context(), p.Logger)
-	rc := http.NewResponseController(w)
+// cachedRender renders key through the shared cache at the hub's current
+// generation. maxAge is passed to renderCache.get.
+func (p *Pages) cachedRender(key string, maxAge time.Duration, render fragmentFunc) fragmentFunc {
+	return func(ctx context.Context) (fragment, error) {
+		return p.renders.get(ctx, key, p.Hub.Gen(), maxAge, render)
+	}
+}
 
+// setStreamHeaders sets the event stream's own response headers.
+func setStreamHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Accel-Buffering", "no") // ask proxies not to buffer the stream
+}
+
+// stream writes first as an event, then one re-rendered event after signals
+// on sub, at most one per renderGap: a signal within renderGap of the last
+// render waits for the gap to end, and any more signals meanwhile join it. It
+// also writes a heartbeat after each idle heartbeatEvery. It returns after
+// sending a final fragment (a completed session) and the done event, when sub
+// is closed (the hub stopped, which is what lets http.Server.Shutdown finish,
+// since Shutdown does not cancel request contexts), when the request context
+// is done, or when an event cannot be rendered or delivered.
+func (p *Pages) stream(w http.ResponseWriter, r *http.Request, event string, sub <-chan struct{}, first fragment, next fragmentFunc) {
+	log := reqid.Logger(r.Context(), p.Logger)
+	rc := http.NewResponseController(w)
+
+	setStreamHeaders(w)
 	w.WriteHeader(http.StatusOK)
 
-	if err := writeEvent(w, rc, eventFrame(event, first)); err != nil {
-		log.Info("event stream ended", "reason", "write failed", "error", err)
+	if !sendFragment(w, rc, log, event, first) {
 		return
 	}
+	lastRender := time.Now()
 	heartbeat := time.NewTicker(heartbeatEvery)
 	defer heartbeat.Stop()
+	var gap <-chan time.Time // not nil while an update waits for the gap to end
 	for {
-		var frame []byte
 		select {
 		case <-r.Context().Done():
 			return
@@ -116,20 +154,51 @@ func (p *Pages) stream(w http.ResponseWriter, r *http.Request, event string, sub
 			if !open {
 				return
 			}
-			html, err := renderWithin(r.Context(), render)
-			if err != nil {
-				logRenderEnd(log, err)
+			if gap != nil {
+				continue // the update already due at the gap's end covers this
+			}
+			if wait := renderGap - time.Since(lastRender); wait > 0 {
+				gap = time.After(wait)
+				continue
+			}
+		case <-gap:
+			gap = nil
+		case <-heartbeat.C:
+			if err := writeEvent(w, rc, []byte(": ping\n\n")); err != nil {
+				log.Info("event stream ended", "reason", "write failed", "error", err)
 				return
 			}
-			frame = eventFrame(event, html)
-		case <-heartbeat.C:
-			frame = []byte(": ping\n\n")
+			continue
 		}
-		if err := writeEvent(w, rc, frame); err != nil {
-			log.Info("event stream ended", "reason", "write failed", "error", err)
+		lastRender = time.Now()
+		frag, err := next(r.Context())
+		if err != nil {
+			logRenderEnd(log, err)
+			return
+		}
+		if !sendFragment(w, rc, log, event, frag) {
 			return
 		}
 	}
+}
+
+// sendFragment writes frag as an event, followed by the done event when frag
+// is final. It reports whether the stream goes on: false after a final
+// fragment or a failed write, which it logs.
+func sendFragment(w http.ResponseWriter, rc *http.ResponseController, log *slog.Logger, event string, frag fragment) bool {
+	frame := eventFrame(event, frag.html)
+	if frag.final {
+		frame = append(frame, doneFrame...)
+	}
+	if err := writeEvent(w, rc, frame); err != nil {
+		log.Info("event stream ended", "reason", "write failed", "error", err)
+		return false
+	}
+	if frag.final {
+		log.Info("event stream ended", "reason", "session completed")
+		return false
+	}
+	return true
 }
 
 // logRenderEnd logs a mid-stream render failure, which ends the stream. A
@@ -187,26 +256,24 @@ func eventFrame(event string, html []byte) []byte {
 	return b.Bytes()
 }
 
-func renderWithin(ctx context.Context, render fragmentFunc) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, renderTimeout)
-	defer cancel()
-	return render(ctx)
-}
-
-func (p *Pages) listFragment(ctx context.Context) ([]byte, error) {
+func (p *Pages) listFragment(ctx context.Context) (fragment, error) {
 	data, err := p.listData(ctx)
 	if err != nil {
-		return nil, err
+		return fragment{}, err
 	}
-	return executeFragment("list", "list_body", data)
+	html, err := executeFragment("list", "list_body", data)
+	return fragment{html: html}, err
 }
 
-func (p *Pages) detailFragment(ctx context.Context, id string) ([]byte, error) {
+// detailFragment renders a session's live section. It is final once the
+// session is completed, since a completed session does not change again.
+func (p *Pages) detailFragment(ctx context.Context, id string) (fragment, error) {
 	data, err := p.detailData(ctx, id)
 	if err != nil {
-		return nil, err
+		return fragment{}, err
 	}
-	return executeFragment("detail", "detail_live", data)
+	html, err := executeFragment("detail", "detail_live", data)
+	return fragment{html: html, final: data.Status == sessions.StatusCompleted}, err
 }
 
 // executeFragment executes the fragment name from page's template set.

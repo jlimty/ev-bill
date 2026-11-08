@@ -2,7 +2,8 @@
 // the stream named by <body data-stream> and puts each "list" or "session"
 // event's data (HTML rendered and escaped by html/template, from this origin)
 // into the matching [data-live] element. <body data-stream-state> says
-// "connected" once an event is applied and "closed" if the stream gives up.
+// "connected" once an event is applied, "done" once the server says the
+// session is completed, and "closed" if the stream gives up.
 (function () {
   'use strict';
   var body = document.body;
@@ -15,12 +16,20 @@
   }
   source.addEventListener('list', swap);
   source.addEventListener('session', swap);
+  // A completed session will not change again: the server sends "done" after
+  // its last fragment and ends the stream, so stop here, with no reload.
+  source.addEventListener('done', function () {
+    source.close();
+    body.dataset.streamState = 'done';
+  });
   // A dropped connection leaves the source CONNECTING and the browser retries
   // it. A non-200 answer (503 at the stream cap, 404 for a deleted session)
-  // closes it for good, so reload the page once, 30 s later.
+  // closes it for good, so reload the page once, 30 to 45 s later. The random
+  // part spreads out viewers that were all turned away at the same moment.
   source.addEventListener('error', function () {
-    if (source.readyState !== EventSource.CLOSED || body.dataset.streamState === 'closed') return;
+    var state = body.dataset.streamState;
+    if (source.readyState !== EventSource.CLOSED || state === 'closed' || state === 'done') return;
     body.dataset.streamState = 'closed';
-    setTimeout(function () { location.reload(); }, 30000);
+    setTimeout(function () { location.reload(); }, 30000 + Math.floor(Math.random() * 15000));
   });
 }());

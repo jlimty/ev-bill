@@ -48,12 +48,16 @@ func (p *Poller) Run(ctx context.Context) error {
 	}
 }
 
-// cycle runs one fetch and reconcile.
+// cycle runs one fetch and reconcile, within one Interval, so a hung HTTP or
+// database call cannot stop polling silently: it fails the cycle, which is
+// recorded like any other failure, and the next tick retries (MIR-1).
 func (p *Poller) cycle(ctx context.Context) {
-	snap, err := p.Fetcher.Fetch(ctx, p.PostalCodes)
+	cycleCtx, cancel := context.WithTimeout(ctx, p.Interval)
+	defer cancel()
+	snap, err := p.Fetcher.Fetch(cycleCtx, p.PostalCodes)
 	if err == nil {
 		var changed bool
-		changed, err = p.Reconciler.Apply(ctx, snap)
+		changed, err = p.Reconciler.Apply(cycleCtx, snap)
 		if err == nil {
 			st := p.Feed.Load()
 			st.Enabled, st.LastError = true, ""
@@ -68,7 +72,7 @@ func (p *Poller) cycle(ctx context.Context) {
 		}
 	}
 	if ctx.Err() != nil {
-		return // shutting down: not a feed failure
+		return // shutting down: not a feed failure (the cycle's own timeout is)
 	}
 	// A failed fetch, a failed reconcile and a snapshot skipped as
 	// ErrFutureSnapshot all land here: LastError is set and LastGood is left

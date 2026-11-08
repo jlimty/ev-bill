@@ -159,7 +159,8 @@ func TestDecode_Errors(t *testing.T) {
 		"top level array":     `[]`,
 		"top level string":    `"x"`,
 		"locations not array": `{"LastUpdatedTime":"2026-11-08 13:45:00","evLocationsData":{}}`,
-		"bad location":        `{"LastUpdatedTime":"2026-11-08 13:45:00","evLocationsData":[{"postalCode":5}]}`,
+		"bad location syntax": `{"LastUpdatedTime":"2026-11-08 13:45:00","evLocationsData":[{"postalCode":"100001",}]}`,
+		"cut mid-location":    `{"LastUpdatedTime":"2026-11-08 13:45:00","evLocationsData":[{"postalCode":"100001","name":"x`,
 		"timestamp not text":  `{"LastUpdatedTime":5}`,
 		"unclosed object":     `{"LastUpdatedTime":"2026-11-08 13:45:00"`,
 	}
@@ -207,5 +208,64 @@ func TestDecode_MIR2_EmptyAndDuplicateIDs(t *testing.T) {
 	}
 	if strings.Join(snap.Skipped, ",") != "<empty>,X" {
 		t.Errorf("Skipped = %v, want [<empty> X]", snap.Skipped)
+	}
+}
+
+// MIR-2, MIR-1: a wrong-typed field in a location the mirror does not watch
+// is ignored, so one bad record among thousands cannot fail every poll. That
+// covers a numeric status, a numeric postal code and a location that is not
+// an object at all. The watched location still decodes.
+func TestDecode_MIR2_MalformedUnwatchedLocationIgnored(t *testing.T) {
+	in := `{"LastUpdatedTime":"2026-11-08 13:45:00","evLocationsData":[
+	{"postalCode":"999999","chargingPoints":[{"plugTypes":[
+	{"current":"AC","powerRating":"7","evIds":[{"evCpId":"OTHER","status":0}]}]}]},
+	{"postalCode":5},
+	7,
+	{"postalCode":"1","name":"watched","chargingPoints":[{"plugTypes":[
+	{"current":"AC","powerRating":"7","evIds":[{"evCpId":"A","status":"1"}]}]}]}]}`
+	snap, err := Decode(strings.NewReader(in), sgt(t), map[string]bool{"1": true})
+	if err != nil {
+		t.Fatalf("MIR-2: Decode = %v, want malformed unwatched locations ignored", err)
+	}
+	if len(snap.Connectors) != 1 || snap.Connectors[0].ChargerID != "A" || len(snap.Skipped) != 0 {
+		t.Errorf("connectors %+v skipped %v, want only A and nothing skipped", snap.Connectors, snap.Skipped)
+	}
+}
+
+// MIR-2: a wrong-typed field in a watched location skips all of that
+// location's connectors and lists them in Skipped; when even the IDs cannot be
+// read, the location is listed by postal code. Other watched locations are
+// unaffected.
+func TestDecode_MIR2_MalformedWatchedLocationSkipped(t *testing.T) {
+	in := `{"LastUpdatedTime":"2026-11-08 13:45:00","evLocationsData":[
+	{"postalCode":"1","chargingPoints":[{"plugTypes":[
+	{"current":"AC","powerRating":"7","evIds":[{"evCpId":"B1","status":0},{"evCpId":"B2","status":"1"}]}]}]},
+	{"postalCode":"2","chargingPoints":[{"plugTypes":[
+	{"current":"AC","powerRating":7,"evIds":[{"evCpId":123}]}]}]},
+	{"postalCode":"4","chargingPoints":5},
+	{"postalCode":"5","name":5},
+	{"postalCode":"3","chargingPoints":[{"plugTypes":[
+	{"current":"AC","powerRating":"7","evIds":[{"evCpId":"GOOD","status":"1"}]}]}]}]}`
+	snap, err := Decode(strings.NewReader(in), sgt(t), map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true})
+	if err != nil {
+		t.Fatalf("MIR-2: Decode = %v, want the malformed watched locations skipped", err)
+	}
+	if len(snap.Connectors) != 1 || snap.Connectors[0].ChargerID != "GOOD" {
+		t.Errorf("MIR-2: connectors = %+v, want only GOOD", snap.Connectors)
+	}
+	if got, want := strings.Join(snap.Skipped, ","), "<postal 2>,<postal 4>,<postal 5>,B1,B2"; got != want {
+		t.Errorf("MIR-2: Skipped = %q, want %q", got, want)
+	}
+}
+
+// MIR-1: lenient decoding of locations does not make broken JSON acceptable:
+// a file cut off inside a location is still an error, never a partial
+// snapshot.
+func TestDecode_MIR1_TruncatedStillFails(t *testing.T) {
+	good := fixture(t)
+	for _, cut := range []int{len(good) / 3, len(good) / 2, len(good) - 3} {
+		if snap, err := Decode(strings.NewReader(good[:cut]), sgt(t), map[string]bool{"100001": true}); err == nil {
+			t.Errorf("MIR-1: Decode of the first %d bytes = %+v, nil; want an error", cut, snap)
+		}
 	}
 }

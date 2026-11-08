@@ -43,8 +43,10 @@ func main() {
 const maxStreams = 100
 
 // pageRefreshEvery is how often open pages re-render with no write, so
-// relative times and the charging-to-stale status (SES-4) stay current.
-const pageRefreshEvery = 30 * time.Second
+// relative times and the charging-to-stale status (SES-4) stay current. It is
+// a variable only so a test can set it far above its own wait, and so tell an
+// update the poller published apart from this refresh.
+var pageRefreshEvery = 30 * time.Second
 
 // run loads config, connects and migrates the database, then serves until ctx
 // is cancelled (OPS-1, OPS-3, OPS-4). The HTTP server, the live hub, its 30 s

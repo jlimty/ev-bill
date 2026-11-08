@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/jlimty/ev-bill/internal/billing"
 	"github.com/jlimty/ev-bill/internal/testdb"
 )
 
@@ -65,8 +69,10 @@ func (b *syncBuffer) String() string {
 
 const testLTAKey = "TEST-LTA-KEY-DO-NOT-LOG"
 
-// fakeDataMall serves the link endpoint and a one-connector batch file.
-func fakeDataMall(t *testing.T) *httptest.Server {
+// fakeDataMall serves the link endpoint and a one-connector batch file,
+// stamped a minute ago in Singapore time, with connector TST-1 in status. If
+// gate is not nil, the file is served only once gate is closed.
+func fakeDataMall(t *testing.T, status string, gate <-chan struct{}) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,11 +85,19 @@ func fakeDataMall(t *testing.T) *httptest.Server {
 			}
 			_, err = fmt.Fprintf(w, `{"value":[{"Link":"%s/file?sig=abc"}]}`, srv.URL)
 		case "/file":
-			_, err = io.WriteString(w, `{"LastUpdatedTime":"2026-11-08 09:00:00","evLocationsData":[
+			if gate != nil {
+				select {
+				case <-gate:
+				case <-r.Context().Done():
+					return
+				}
+			}
+			stamp := time.Now().In(billing.SingaporeTariff().Location).Add(-time.Minute).Format("2006-01-02 15:04:05")
+			_, err = fmt.Fprintf(w, `{"LastUpdatedTime":%q,"evLocationsData":[
 				{"address":"1 Test Road","name":"Test Mall","postalCode":"100001","chargingPoints":[
 					{"operator":"Testco","position":"B1","plugTypes":[
 						{"plugType":"Type 2","price":"0.5000","current":"AC","powerRating":"7.4","priceType":"",
-						 "evIds":[{"evCpId":"TST-1","status":"1"}]}]}]}]}`)
+						 "evIds":[{"evCpId":"TST-1","status":%q}]}]}]}]}`, stamp, status)
 		default:
 			http.NotFound(w, r)
 		}
@@ -135,7 +149,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // shutdown bound.
 func TestRun_MIR11_ShutsDownWithinTimeout(t *testing.T) {
 	pool := testdb.New(t)
-	dm := fakeDataMall(t)
+	dm := fakeDataMall(t, "1", nil)
 	env := map[string]string{
 		"PORT":                "0",
 		"DATABASE_URL":        testDatabaseURL(t, pool),
@@ -196,5 +210,135 @@ func TestRun_MIR10_MirrorOffWithoutKey(t *testing.T) {
 	}
 	if n := strings.Count(out.String(), "mirror off: LTA_ACCOUNT_KEY not set"); n != 1 {
 		t.Errorf("mirror-off message logged %d times, want once:\n%s", n, out)
+	}
+}
+
+// freePort returns a TCP port that was free a moment ago, so a test knows
+// where run listens.
+func freePort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("find a free port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("free the port: %v", err)
+	}
+	return strconv.Itoa(port)
+}
+
+// nextListEvent reads the stream up to the end of the next "list" event and
+// returns its data lines joined by "\n".
+func nextListEvent(r *bufio.Reader) (string, error) {
+	var data []string
+	inList := false
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		line = strings.TrimSuffix(line, "\n")
+		switch {
+		case line == "event: list":
+			inList = true
+		case inList && strings.HasPrefix(line, "data: "):
+			data = append(data, strings.TrimPrefix(line, "data: "))
+		case line == "" && inList:
+			return strings.Join(data, "\n"), nil
+		}
+	}
+}
+
+// LIVE-2, MIR-1: run wires the poller's OnChange to the hub. A reconcile that
+// opens a session reaches an open /events stream within seconds. The page
+// refresh ticker is set to an hour, so only the poller's publish can explain
+// the update; were newPoller given nil instead of hub.Publish, this would
+// time out.
+func TestRun_LIVE2_PollerChangeReachesStream(t *testing.T) {
+	old := pageRefreshEvery
+	pageRefreshEvery = time.Hour
+	t.Cleanup(func() { pageRefreshEvery = old })
+
+	pool := testdb.New(t)
+	gate := make(chan struct{})
+	dm := fakeDataMall(t, "0", gate)
+	port := freePort(t)
+	env := map[string]string{
+		"PORT":                port,
+		"DATABASE_URL":        testDatabaseURL(t, pool),
+		"API_KEY":             "k",
+		"LTA_ACCOUNT_KEY":     testLTAKey,
+		"DATAMALL_BASE_URL":   dm.URL,
+		"MIRROR_POSTAL_CODES": "100001",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, func(k string) string { return env[k] }, io.Discard) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("run = %v, want nil", err)
+		}
+	})
+
+	// Its own transport, so its idle connections can be closed before run
+	// shuts down, which would otherwise wait on them.
+	client := &http.Client{Transport: &http.Transport{}}
+	t.Cleanup(client.CloseIdleConnections)
+	base := "http://127.0.0.1:" + port
+	waitFor(t, "the server to answer", func() bool {
+		resp, err := client.Get(base + "/healthz")
+		if err != nil {
+			return false
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close healthz body: %v", err)
+		}
+		return resp.StatusCode == http.StatusOK
+	})
+	resp, err := client.Get(base + "/events?view=list")
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close stream body: %v", err)
+		}
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /events = %d, want 200", resp.StatusCode)
+	}
+	r := bufio.NewReader(resp.Body)
+	first, err := nextListEvent(r)
+	if err != nil {
+		t.Fatalf("first event: %v", err)
+	}
+	if strings.Contains(first, "TST-1") {
+		t.Fatal("first event already has TST-1: the poll ran before the stream opened")
+	}
+
+	close(gate) // the first poll's file arrives now
+	got := make(chan string, 1)
+	go func() {
+		for {
+			data, err := nextListEvent(r)
+			if err != nil {
+				got <- "error: " + err.Error()
+				return
+			}
+			if strings.Contains(data, "TST-1") {
+				got <- data
+				return
+			}
+		}
+	}()
+	select {
+	case data := <-got:
+		if !strings.Contains(data, "TST-1") {
+			t.Fatalf("LIVE-2: stream ended before the poller's change arrived: %s", data)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("LIVE-2: the poller's new session did not reach the stream within 10 s")
 	}
 }

@@ -204,3 +204,41 @@ func TestHub_MIR11_RunWithCancelledContext(t *testing.T) {
 		}
 	})
 }
+
+// LIVE-2: the generation counts broadcasts, not Publish calls, and is already
+// raised when a subscriber receives the broadcast's signal, so a stream that
+// reads it after a signal never keys its render to an older generation.
+func TestHub_LIVE2_GenCountsBroadcasts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := NewHub(100)
+		if g := h.Gen(); g != 0 {
+			t.Fatalf("LIVE-2: Gen before any broadcast = %d, want 0", g)
+		}
+		ch, cancel, ok := h.Subscribe()
+		if !ok {
+			t.Fatal("Subscribe refused")
+		}
+		defer cancel()
+		stop := startHub(t, h)
+
+		h.Publish()
+		<-ch
+		if g := h.Gen(); g != 1 {
+			t.Errorf("LIVE-2: Gen after one broadcast = %d, want 1", g)
+		}
+		synctest.Wait()
+		h.Publish()
+		synctest.Wait()
+		h.Publish()
+		synctest.Wait()
+		if g := h.Gen(); g != 3 {
+			t.Errorf("LIVE-2: Gen after three broadcasts = %d, want 3", g)
+		}
+		if !pending(t, ch) || pending(t, ch) {
+			t.Error("LIVE-2: want exactly one coalesced signal waiting")
+		}
+		if err := stop(); err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	})
+}

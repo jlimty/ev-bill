@@ -16,6 +16,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/jlimty/ev-bill/internal/billing"
 	"github.com/jlimty/ev-bill/internal/live"
 	"github.com/jlimty/ev-bill/internal/sessions"
 )
@@ -407,7 +408,7 @@ func streamPages() *Pages {
 
 // fixedRender always renders the same fragment.
 func fixedRender(html string) fragmentFunc {
-	return func(context.Context) ([]byte, error) { return []byte(html), nil }
+	return func(context.Context) (fragment, error) { return fragment{html: []byte(html)}, nil }
 }
 
 // runStream runs p.stream on w in a goroutine and returns the channel it
@@ -419,7 +420,7 @@ func runStream(t *testing.T, p *Pages, w http.ResponseWriter, ctx context.Contex
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.stream(w, r, "list", sub, []byte("<tr>first</tr>"), render)
+		p.stream(w, r, "list", sub, fragment{html: []byte("<tr>first</tr>")}, render)
 	}()
 	return sub, func() { <-done }
 }
@@ -491,7 +492,7 @@ func TestEvents_LIVE1_WriteFailuresEndStream(t *testing.T) {
 		{"write error", func(f *fakeStream) { f.writeErr = boom }, fixedRender("x"), false},
 		{"flush error", func(f *fakeStream) { f.flushErr = boom }, fixedRender("x"), false},
 		{"deadline error", func(f *fakeStream) { f.deadlineErr = boom }, fixedRender("x"), false},
-		{"render error", func(*fakeStream) {}, func(context.Context) ([]byte, error) { return nil, boom }, true},
+		{"render error", func(*fakeStream) {}, func(context.Context) (fragment, error) { return fragment{}, boom }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -528,6 +529,7 @@ func TestEvents_LIVE1_DeadlinesNotSupportedStillStreams(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		sub, wait := runStream(t, streamPages(), rec, ctx, fixedRender("<tr>next</tr>"))
 		sub <- struct{}{}
+		time.Sleep(renderGap) // the signal came within renderGap of the first event
 		synctest.Wait()
 		cancel()
 		wait()
@@ -596,7 +598,7 @@ func TestEvents_LIVE1_RenderEndLogLevels(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				var logs bytes.Buffer
 				p := &Pages{Logger: slog.New(slog.NewTextHandler(&logs, nil))}
-				render := func(context.Context) ([]byte, error) { return nil, tc.err }
+				render := func(context.Context) (fragment, error) { return fragment{}, tc.err }
 				sub, wait := runStream(t, p, newFakeStream(), t.Context(), render)
 				sub <- struct{}{}
 				wait()
@@ -645,4 +647,118 @@ func TestEvents_LIVE3_EmptyListFragmentIsNotEmpty(t *testing.T) {
 	if page := e.get("/").Body.String(); !strings.Contains(page, `<div class="card" data-live="list">`+first) {
 		t.Errorf("LIVE-3: empty list event is not the content of the swapped element:\nevent: %s\npage: %s", first, page)
 	}
+}
+
+// LIVE-1, LIVE-2: through the real handler and store, five streams on the
+// list view cost one store render per Publish between them, and each still
+// gets the new row.
+func TestEvents_LIVE2_OneStoreRenderPerPublish(t *testing.T) {
+	e := newStreamEnv(t, 100, nil)
+	var clients []*sseClient
+	for range 5 {
+		c := openStream(t, e.srv, "/events?view=list")
+		c.mustNext("list")
+		clients = append(clients, c)
+	}
+	before := e.p.renders.renders.Load()
+	e.start("CP-NEW", sgt(0, 15, 7))
+	e.hub.Publish()
+	for i, c := range clients {
+		if got := c.mustNext("list"); !strings.Contains(got, "CP-NEW") {
+			t.Errorf("LIVE-1: stream %d update lacks the new session: %s", i, got)
+		}
+	}
+	if n := e.p.renders.renders.Load() - before; n != 1 {
+		t.Errorf("LIVE-2: one Publish to 5 list streams made %d store renders, want 1", n)
+	}
+}
+
+// LIVE-1: a session stream sends a completed session's fragment, then a done
+// event with data 1, and ends, freeing its slot: on connect for a session
+// already completed, and when a charging session completes mid-stream.
+func TestEvents_LIVE1_CompletedSessionSendsDone(t *testing.T) {
+	e := newStreamEnv(t, 1, nil)
+	done := e.mockup("CP-DONE")
+	c := openStream(t, e.srv, "/events?view=session&id="+done)
+	wantContains(t, c.mustNext("session"), badge("completed"))
+	if data := c.mustNext("done"); data != "1" {
+		t.Errorf("LIVE-1: done data = %q, want 1", data)
+	}
+	if _, _, err := c.next(); !errors.Is(err, io.EOF) {
+		t.Errorf("LIVE-1: after done: %v, want the stream to end", err)
+	}
+
+	id := e.start("CP-01", sgt(0, 15, 7))
+	c = openStream(t, e.srv, "/events?view=session&id="+id) // the cap is 1: the first stream freed its slot
+	wantContains(t, c.mustNext("session"), badge("charging"))
+	if _, _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(0, 18, 7), MeterWh: 1500}, fixedNow()); err != nil {
+		t.Fatalf("stop session: %v", err)
+	}
+	e.hub.Publish()
+	wantContains(t, c.mustNext("session"), badge("completed"), "1.5 kWh")
+	c.mustNext("done")
+	if _, _, err := c.next(); !errors.Is(err, io.EOF) {
+		t.Errorf("LIVE-1: after done: %v, want the stream to end", err)
+	}
+}
+
+// LIVE-1: "GET /events" also matches HEAD. HEAD gets the stream's headers and
+// an empty body at once, and holds no stream slot. A bad view is still 400.
+func TestEvents_LIVE1_HeadHoldsNoSlot(t *testing.T) {
+	e := newStreamEnv(t, 1, nil)
+	for range 3 {
+		// A HEAD that streamed would end only with this context, with a body.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		rec := httptest.NewRecorder()
+		e.mux.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodHead, "/events?view=list", nil))
+		cancel()
+		if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+			t.Fatalf("LIVE-1: HEAD /events = %d with %d body bytes, want 200 and none", rec.Code, rec.Body.Len())
+		}
+		for name, want := range map[string]string{
+			"Content-Type":            "text/event-stream",
+			"Cache-Control":           "no-store",
+			"Content-Security-Policy": contentSecurityPolicy,
+		} {
+			if got := rec.Header().Get(name); got != want {
+				t.Errorf("LIVE-1: HEAD %s = %q, want %q", name, got, want)
+			}
+		}
+	}
+	rec := httptest.NewRecorder()
+	e.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/events?view=nope", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("LIVE-1: HEAD with a bad view = %d, want 400", rec.Code)
+	}
+	if e.p.renders.renders.Load() != 0 {
+		t.Error("LIVE-1: HEAD rendered a fragment")
+	}
+	// The cap is 1, so the HEADs hold no slot if a stream still opens.
+	openStream(t, e.srv, "/events?view=list").mustNext("list")
+}
+
+// LIVE-1: a final fragment (a completed session) is followed by the done
+// event in the same write, and the stream ends without the request ending,
+// whether it is the first event or a later one.
+func TestEvents_LIVE1_FinalFragmentEndsStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeStream()
+		final := func(context.Context) (fragment, error) {
+			return fragment{html: []byte("<p>completed</p>"), final: true}, nil
+		}
+		sub, wait := runStream(t, streamPages(), f, t.Context(), final)
+		sub <- struct{}{}
+		wait()
+		body, _ := f.snapshot()
+		if want := "event: list\ndata: <tr>first</tr>\n\nevent: list\ndata: <p>completed</p>\n\n" + doneFrame; body != want {
+			t.Errorf("LIVE-1: body = %q, want %q", body, want)
+		}
+
+		f = newFakeStream()
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/events", nil)
+		streamPages().stream(f, r, "session", make(chan struct{}), fragment{html: []byte("x"), final: true}, final)
+		if body, _ := f.snapshot(); body != "event: session\ndata: x\n\n"+doneFrame {
+			t.Errorf("LIVE-1: final first event: body = %q", body)
+		}
+	})
 }
