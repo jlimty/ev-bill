@@ -84,6 +84,7 @@ type segmentBody struct {
 
 type sessionBody struct {
 	ID         string        `json:"id"`
+	Source     string        `json:"source"`
 	ChargerID  string        `json:"charger_id"`
 	Status     string        `json:"status"`
 	StartedAt  string        `json:"started_at"`
@@ -545,5 +546,47 @@ func TestWriteJSON_EncodeFailureIsGeneric500(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "level=ERROR") {
 		t.Errorf("encode failure not logged: %q", logs.String())
+	}
+}
+
+// MIR-7: a meter value or stop for a mirror session is 409 mirror_session.
+func TestAPI_MIR7_MirrorSessionIs409(t *testing.T) {
+	e := newEnv(t)
+	st := store.New(e.pool)
+	start := time.Date(2026, 11, 7, 0, 0, 0, 0, billing.SingaporeTariff().Location)
+	sess, err := st.CreateSession(t.Context(), sessions.SourceMirror, "CH-M", start, 0, fixedNow())
+	if err != nil {
+		t.Fatalf("create mirror session: %v", err)
+	}
+	wantError(t, e.post("/api/sessions/"+sess.ID+"/meter-values", meterBody(t0015, 500)), http.StatusConflict, "mirror_session")
+	wantError(t, e.post("/api/sessions/"+sess.ID+"/stop", stopBody(t0015, 500)), http.StatusConflict, "mirror_session")
+}
+
+// MIR-7: every session in GET one and GET list carries its source.
+func TestAPI_MIR7_SourceInResponses(t *testing.T) {
+	e := newEnv(t)
+	st := store.New(e.pool)
+	start := time.Date(2026, 11, 7, 0, 0, 0, 0, billing.SingaporeTariff().Location)
+	apiID := e.startSession("CH-A", t0015, 0)
+	mirror, err := st.CreateSession(t.Context(), sessions.SourceMirror, "CH-M", start, 0, fixedNow())
+	if err != nil {
+		t.Fatalf("create mirror session: %v", err)
+	}
+	for id, want := range map[string]string{apiID: "api", mirror.ID: "mirror"} {
+		rec := e.get("/api/sessions/" + id)
+		if got := decodeSession(t, rec).Source; got != want {
+			t.Errorf("MIR-7: GET one source = %q, want %q", got, want)
+		}
+	}
+	var list listBody
+	if err := json.Unmarshal(e.get("/api/sessions").Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	have := map[string]string{}
+	for _, s := range list.Sessions {
+		have[s.ID] = s.Source
+	}
+	if have[apiID] != "api" || have[mirror.ID] != "mirror" {
+		t.Errorf("MIR-7: list sources = %v", have)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
 	"github.com/jlimty/ev-bill/internal/testdb"
 )
@@ -54,7 +55,7 @@ func sgt(h, m int, day int) time.Time {
 
 func (e *env) start(charger string, at time.Time) string {
 	e.t.Helper()
-	s, err := e.st.CreateSession(context.Background(), charger, at, 0, fixedNow())
+	s, err := e.st.CreateSession(context.Background(), sessions.SourceAPI, charger, at, 0, fixedNow())
 	if err != nil {
 		e.t.Fatalf("create session: %v", err)
 	}
@@ -63,7 +64,7 @@ func (e *env) start(charger string, at time.Time) string {
 
 func (e *env) reading(id string, at time.Time, wh int64) {
 	e.t.Helper()
-	if _, _, _, err := e.st.AddReading(context.Background(), id, billing.Reading{At: at, MeterWh: wh}, fixedNow()); err != nil {
+	if _, _, _, err := e.st.AddReading(context.Background(), sessions.SourceAPI, id, billing.Reading{At: at, MeterWh: wh}, fixedNow()); err != nil {
 		e.t.Fatalf("add reading: %v", err)
 	}
 }
@@ -74,7 +75,7 @@ func (e *env) mockup(charger string) string {
 	id := e.start(charger, sgt(21, 40, 6))
 	e.reading(id, sgt(22, 20, 6), 4800)
 	e.reading(id, sgt(23, 0, 6), 9600)
-	if _, _, err := e.st.StopSession(context.Background(), id, billing.Reading{At: sgt(0, 15, 7), MeterWh: 18000}, fixedNow()); err != nil {
+	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(0, 15, 7), MeterWh: 18000}, fixedNow()); err != nil {
 		e.t.Fatalf("stop session: %v", err)
 	}
 	return id
@@ -263,7 +264,7 @@ func TestDetailPage_UI2_SameDayTimesHaveNoDate(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-02", sgt(10, 0, 6))
 	e.reading(id, sgt(10, 30, 6), 3000)
-	if _, _, err := e.st.StopSession(context.Background(), id, billing.Reading{At: sgt(12, 0, 6), MeterWh: 9000}, fixedNow()); err != nil {
+	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(12, 0, 6), MeterWh: 9000}, fixedNow()); err != nil {
 		t.Fatalf("stop session: %v", err)
 	}
 	body := e.get("/sessions/" + id).Body.String()
@@ -289,7 +290,7 @@ func TestDetailPage_UI2_JustUnder24hStaysShort(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-04", sgt(7, 0, 6))
 	now := sgt(8, 0, 7)
-	if _, _, err := e.st.StopSession(context.Background(), id, billing.Reading{At: sgt(6, 59, 7), MeterWh: 20000}, now); err != nil {
+	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(6, 59, 7), MeterWh: 20000}, now); err != nil {
 		t.Fatalf("stop session: %v", err)
 	}
 	body := e.get("/sessions/" + id).Body.String()
@@ -306,7 +307,7 @@ func TestDetailPage_UI2_FortyEightHourSegmentsShowDates(t *testing.T) {
 	id := e.start("CP-03", sgt(7, 0, 6))
 	now := sgt(8, 0, 8)
 	stop := billing.Reading{At: sgt(7, 0, 8), MeterWh: 48000}
-	if _, _, err := e.st.StopSession(context.Background(), id, stop, now); err != nil {
+	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, stop, now); err != nil {
 		t.Fatalf("stop session: %v", err)
 	}
 	body := e.get("/sessions/" + id).Body.String()
@@ -319,7 +320,7 @@ func TestDetailPage_UI2_Exactly24hShowsDates(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-05", sgt(7, 0, 6))
 	now := sgt(8, 0, 7)
-	if _, _, err := e.st.StopSession(context.Background(), id, billing.Reading{At: sgt(7, 0, 7), MeterWh: 24000}, now); err != nil {
+	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(7, 0, 7), MeterWh: 24000}, now); err != nil {
 		t.Fatalf("stop session: %v", err)
 	}
 	body := e.get("/sessions/" + id).Body.String()

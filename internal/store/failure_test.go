@@ -27,15 +27,15 @@ func storeOps() []storeOp {
 	return []storeOp{
 		{"Ping", func(c context.Context, s *store.Store, _ string) error { return s.Ping(c) }},
 		{"CreateSession", func(c context.Context, s *store.Store, _ string) error {
-			_, err := s.CreateSession(c, "CH-FAIL", at(10, 0, 0, 0), 0, now)
+			_, err := s.CreateSession(c, sessions.SourceAPI, "CH-FAIL", at(10, 0, 0, 0), 0, now)
 			return err
 		}},
 		{"AddReading", func(c context.Context, s *store.Store, id string) error {
-			_, _, _, err := s.AddReading(c, id, r, now)
+			_, _, _, err := s.AddReading(c, sessions.SourceAPI, id, r, now)
 			return err
 		}},
 		{"StopSession", func(c context.Context, s *store.Store, id string) error {
-			_, _, err := s.StopSession(c, id, r, now)
+			_, _, err := s.StopSession(c, sessions.SourceAPI, id, r, now)
 			return err
 		}},
 		{"GetSession", func(c context.Context, s *store.Store, id string) error {
@@ -115,7 +115,7 @@ func TestStoreFailures_API2_BrokenSchema(t *testing.T) {
 			pool := testdb.New(t)
 			id := liveSession(t, pool)
 			// A second reading so ListRecent has a session to load readings for.
-			if _, _, _, err := store.New(pool).AddReading(ctx(), id, billing.Reading{At: at(10, 1, 0, 0), MeterWh: 1}, now); err != nil {
+			if _, _, _, err := store.New(pool).AddReading(ctx(), sessions.SourceAPI, id, billing.Reading{At: at(10, 1, 0, 0), MeterWh: 1}, now); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := pool.Exec(ctx(), "DROP TABLE "+tc.drop); err != nil {

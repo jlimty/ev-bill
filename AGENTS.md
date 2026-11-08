@@ -42,7 +42,7 @@ Integration tests use the `evbilling_test` database through `TEST_DATABASE_URL`.
 - BIL-6 applies per reading interval: the integer remainder goes to that interval's last piece, which conserves energy overall.
 - Session limits: stale after 15 min without a reading, max duration 48 h, future clock skew 5 min. `charger_id` must match `^[A-Z0-9-]{1,32}$`.
 - Write endpoints require header `X-API-Key`, compared in constant time.
-- Env vars: `PORT`, `DATABASE_URL`, `API_KEY`; tests use `TEST_DATABASE_URL`. Health ping timeout 2 s, shutdown timeout 10 s.
+- Env vars: `PORT`, `DATABASE_URL` and `API_KEY` are required. `LTA_ACCOUNT_KEY`, `DATAMALL_BASE_URL` (default `https://datamall2.mytransport.sg`) and `MIRROR_POSTAL_CODES` are optional. Tests use `TEST_DATABASE_URL`. Health ping timeout 2 s, shutdown timeout 10 s.
 - Coverage: ≥ 80% across `./internal/...` and ≥ 95% for `internal/billing`.
 - Postgres major version `18` (≥ 13) is identical locally, in CI and on Render.
 - Not allowed: web frameworks, ORMs, JS frameworks, Docker.
