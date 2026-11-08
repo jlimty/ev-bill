@@ -1,16 +1,22 @@
-{{define "list_body"}}<p class="feed{{if .Feed.Warn}} warn{{end}}">{{.Feed.Text}}</p>
-<table>
-<thead><tr><th>Charger</th><th>Location</th><th>Started</th><th>Status</th><th class="num">Energy</th><th class="num">Cost</th></tr></thead>
+{{define "list_body"}}{{if .FirstPage}}<p class="feed">Not live. <a href="{{.FirstPage}}">Back to the first page</a></p>
+{{else}}<p class="feed{{if .Feed.Warn}} warn{{end}}">{{.Feed.Text}}</p>
+{{end}}{{with .Count}}<p class="tally">{{.}}</p>
+{{end}}<table class="sessions">
+<caption class="vh">{{.Caption}}</caption>
+<thead><tr><th scope="col" class="charger">Charger</th><th scope="col"{{with .Started.Sort}} aria-sort="{{.}}"{{end}}><a href="{{.Started.URL}}" data-key="sort-started">Started{{template "sort_arrow" .Started.Sort}}</a></th><th scope="col" class="status">Status</th><th scope="col" class="num"{{with .Energy.Sort}} aria-sort="{{.}}"{{end}}><a href="{{.Energy.URL}}" data-key="sort-energy">Energy{{template "sort_arrow" .Energy.Sort}}</a></th><th scope="col" class="num">{{.CostHeader}}</th></tr></thead>
 <tbody>
-{{range .Rows}}<tr>
-<td><a href="/sessions/{{.ID}}">{{.Charger}}</a> <span class="source {{.Source}}">{{.Source}}</span></td>
-<td>{{if .Location}}{{.Location}}<div class="sub">{{.Info}}</div>{{else}}<span class="sub">-</span>{{end}}</td>
-<td>{{.Started}}<div class="sub">{{.Ago}}</div></td>
-<td><span class="badge {{.Status}}">{{.Status}}</span></td>
-<td class="num">{{.Energy}}</td>
-<td class="num">{{.Cost}}</td>
+{{range .Rows}}<tr data-key="{{.ID}}">
+<td class="charger"><span class="id"><a href="/sessions/{{.ID}}">{{.Charger}}</a> <span class="source {{.SourceClass}}">{{.SourceLabel}}</span></span>{{with .Where}}<div class="sub">{{.}}</div>{{end}}</td>
+<td class="started">{{.Started}}<div class="sub">{{.Ago}}</div></td>
+<td class="status" data-watch><span class="badge {{.StatusClass}}">{{.Status}}</span></td>
+<td class="num energy" data-watch>{{.Energy}}</td>
+<td class="num cost" data-watch>{{.Cost}}</td>
 </tr>
-{{else}}<tr><td colspan="6" class="empty">No sessions yet. Sessions appear here as soon as a charger starts one.</td></tr>
+{{else}}<tr class="none"><td colspan="5" class="empty">{{.Empty}}</td></tr>
 {{end}}</tbody>
-{{if .Rows}}<tfoot><tr><td colspan="4">Total</td><td class="num">{{.TotalEnergy}}</td><td class="num">{{.TotalCost}}</td></tr></tfoot>
-{{end}}</table>{{end}}
+{{if .Rows}}<tfoot><tr data-key="total"><th scope="row" colspan="3">{{.TotalLabel}}</th><td class="num" data-watch>{{.TotalEnergy}}</td><td class="num" data-watch>{{.TotalCost}}</td></tr></tfoot>
+{{end}}</table>
+{{if or .PrevURL .NextURL}}<nav class="pager" aria-label="Pages of sessions">{{with .PrevURL}}<a href="{{.}}" rel="prev" data-key="pager-prev">← Previous</a>{{end}}{{with .NextURL}}<a href="{{.}}" rel="next" data-key="pager-next">Next →</a>{{end}}</nav>
+{{end}}{{end}}
+
+{{define "sort_arrow"}}{{if eq . "descending"}} <span aria-hidden="true">↓</span>{{else if eq . "ascending"}} <span aria-hidden="true">↑</span>{{end}}{{end}}

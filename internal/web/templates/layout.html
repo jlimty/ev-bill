@@ -91,7 +91,52 @@ dd { margin:0; }
 .key { margin:1.5rem 0 1rem; padding-top:1rem; border-top:1px solid var(--line); }
 .key .legend { margin:0 0 .75rem; }
 .swatch.nodata { border:1px dotted var(--muted); }
-@media (max-width:39.99rem) { nav a { min-height:44px; display:inline-flex; align-items:center; } }
+.scope { margin:-.5rem 0 1rem; }
+.tally { margin:0 0 .5rem; color:var(--muted); font-size:.9rem; font-variant-numeric:tabular-nums; }
+.sessions th, .sessions td { padding:.5rem; white-space:normal; vertical-align:top; }
+.sessions th a { text-decoration:none; }
+.sessions th a:hover { text-decoration:underline; }
+.sessions td.num { white-space:nowrap; }
+@media (min-width:48rem) { .sessions td.started { white-space:nowrap; } }
+.sessions .id { overflow-wrap:anywhere; }
+.sessions .id a { font-weight:600; }
+/* The charger link covers its whole row or card, so the row is the tap target. */
+.sessions tbody tr { position:relative; }
+.sessions tbody tr[data-key]:hover { background:var(--bg); }
+.sessions .id a::after { content:""; position:absolute; inset:0; border-radius:4px; }
+.sessions .id a:focus-visible { outline:0; }
+.sessions .id a:focus-visible::after { outline:2px solid var(--link); outline-offset:-2px; }
+.sessions tfoot th { color:var(--ink); font-size:1rem; font-weight:700; border-bottom:0; }
+.pager { display:flex; gap:1rem; margin-top:.5rem; font-size:1rem; }
+.pager a { display:inline-flex; align-items:center; padding:.5rem 0; font-weight:600; text-decoration:none; }
+.pager a:hover { text-decoration:underline; }
+.pager a[rel="next"] { margin-left:auto; }
+@media (max-width:39.99rem) {
+  nav a, .pager a { min-height:44px; display:inline-flex; align-items:center; }
+  /* Rows become three-line cards. The header row stays as a strip of the sort
+     links and the cost's tariff; the other labels are visually hidden. */
+  .sessions, .sessions thead, .sessions tbody, .sessions tfoot { display:block; }
+  .sessions thead tr { display:flex; flex-wrap:wrap; column-gap:1rem; border-bottom:1px solid var(--line); }
+  .sessions thead th { display:block; padding:0; border:0; }
+  .sessions thead th.num { text-align:left; }
+  /* Mirrors .vh, for phones only: these labels show as column heads from 40rem up. */
+  .sessions thead .charger, .sessions thead .status { position:absolute; width:1px; height:1px; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  .sessions thead a, .sessions thead th:last-child { display:inline-flex; align-items:center; gap:.25rem; min-height:44px; }
+  .sessions tbody tr { display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-areas:"id status" "energy cost" "where started"; gap:.25rem 1rem; padding:.75rem 0; border-bottom:1px solid var(--line); }
+  .sessions tbody td { display:block; padding:0; border:0; }
+  .sessions td.charger { display:contents; }
+  .sessions .id { grid-area:id; align-self:center; }
+  .sessions td.charger .sub { grid-area:where; }
+  .sessions td.status { grid-area:status; text-align:right; }
+  .sessions td.energy { grid-area:energy; text-align:left; }
+  .sessions td.cost { grid-area:cost; }
+  .sessions td.started { grid-area:started; text-align:right; color:var(--muted); font-size:.85rem; }
+  .sessions td.started .sub { font-size:inherit; }
+  .sessions tbody tr.none { display:block; }
+  .sessions tfoot tr { display:flex; flex-wrap:wrap; justify-content:space-between; gap:0 1rem; padding-top:.75rem; }
+  .sessions tfoot th, .sessions tfoot td { display:block; padding:0; border:0; }
+  .sessions tfoot th { flex-basis:100%; }
+}
 @media (max-width:359px) { .t06, .t18 { display:none; } }
 footer { color:var(--muted); font-size:.85rem; padding-bottom:2rem; }
 footer p { margin:.25rem 0; }

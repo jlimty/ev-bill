@@ -80,7 +80,7 @@ func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 	must(t, "open list", err)
 	doneRow := page.Locator("tbody tr").Filter(playwright.LocatorFilterOptions{HasText: "CP-01"})
 	must(t, "CP-01 badge", expect.Locator(doneRow.Locator(".badge")).ToHaveText("completed"))
-	must(t, "CP-01 cost", expect.Locator(doneRow.Locator("td").Nth(5)).ToHaveText("$9.98"))
+	must(t, "CP-01 cost", expect.Locator(doneRow.Locator("td.cost")).ToHaveText("$9.98"))
 	activeRow := page.Locator("tbody tr").Filter(playwright.LocatorFilterOptions{HasText: "CP-02"})
 	must(t, "CP-02 badge", expect.Locator(activeRow.Locator(".badge")).ToHaveText("charging"))
 
@@ -268,7 +268,7 @@ func TestStatusPages_LIVE3_UpdatesWithoutReload(t *testing.T) {
 
 	row := page.Locator("tbody tr").Filter(playwright.LocatorFilterOptions{HasText: "CHARGER-LIVE"})
 	must(t, "LIVE-3: row appears", expect.Locator(row).ToBeVisible(playwright.LocatorAssertionsToBeVisibleOptions{Timeout: playwright.Float(5000)}))
-	must(t, "LIVE-4: mirror label", expect.Locator(row.Locator(".source")).ToHaveText("mirror"))
+	must(t, "VIEW-2: mirror label", expect.Locator(row.Locator(".source")).ToHaveText("real charger"))
 	must(t, "LIVE-4: location", expect.Locator(row).ToContainText("Test Mall"))
 
 	marker, err := page.Evaluate("() => window.__marker")

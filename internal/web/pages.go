@@ -91,24 +91,10 @@ const (
 	navLocations = "locations"
 )
 
-// listRow is one session on the list page. Source is "mirror" or "simulated";
-// Location and Info ("Testco · 7.4 kW AC") are empty without a chargers row.
-type listRow struct {
-	ID, Charger, Source, Location, Info, Started, Ago, Status, Energy, Cost string
-}
-
 // feedLine is the mirror's status line on the list page (LIVE-4).
 type feedLine struct {
 	Text string
 	Warn bool
-}
-
-type listPage struct {
-	layoutData
-	Notice                 string
-	Feed                   feedLine
-	Rows                   []listRow
-	TotalEnergy, TotalCost string
 }
 
 type barSeg struct {
@@ -126,17 +112,21 @@ type barLegend struct {
 
 type detailPage struct {
 	layoutData
-	Charger, Source, Status, Started, Stopped string
-	Location, Operator, Power, Notice         string
-	Bar                                       []barSeg
-	Legend                                    barLegend
-	Rows                                      []tableRow
-	Energy, Total                             string
+	Charger, SourceClass, SourceLabel string
+	Status, Started, Stopped          string
+	Location, Operator, Power, Notice string
+	Bar                               []barSeg
+	Legend                            barLegend
+	Rows                              []tableRow
+	Energy, Total                     string
 }
 
+// errorPage is an error page. LinkURL and LinkText are its way out; when
+// empty, it links back to all sessions.
 type errorPage struct {
 	layoutData
-	Heading, Message string
+	Heading, Message  string
+	LinkURL, LinkText string
 }
 
 func (p *Pages) layout(title, stream string) layoutData {
@@ -147,14 +137,24 @@ const (
 	// feedDelayedAfter is the age of the last good poll beyond which the feed
 	// line turns into a warning (LIVE-4).
 	feedDelayedAfter = 15 * time.Minute
-	// sourceSimulated labels API sessions; mirror sessions show "mirror".
+	// sourceSimulated is API sessions' source class and label (VIEW-2).
 	sourceSimulated = "simulated"
+	// sourceRealLabel is mirror sessions' source label (VIEW-2).
+	sourceRealLabel = "real charger"
+	// statusOccupied is a mirror session's label for SES-4's charging (VIEW-2).
+	statusOccupied = "occupied"
 )
 
 // estimateNotice explains the mirror's estimates (LIVE-4). The cap comes from
 // the mirror's own constant, so the page cannot disagree with the reconciler.
 var estimateNotice = "Mirrored chargers: energy and cost are estimates at rated power (DC capped at " +
 	FormatKW(mirror.DCMaxW) + `); "occupied" includes reserved connectors.`
+
+// tariffName names the tariff by its own rates, peak then off-peak: "62/48"
+// (VIEW-1). Every label that names the tariff uses it.
+func tariffName(t billing.Tariff) string {
+	return fmt.Sprintf("%d/%d", t.PeakRateCentsPerKWh, t.OffPeakRateCentsPerKWh)
+}
 
 // tariffHeader describes the tariff from its own values (LIVE-4), e.g.
 // "Peak 07:00–23:00 · 62¢/kWh · Off-peak 23:00–07:00 · 48¢/kWh · Singapore time".
@@ -183,12 +183,32 @@ func zoneCity(loc *time.Location) string {
 	return strings.ReplaceAll(name, "_", " ")
 }
 
-// sourceLabel is the row label for a session's source (LIVE-4).
-func sourceLabel(s sessions.Source) string {
+// sourceClass is the CSS class of a session's source pill: "mirror" or
+// "simulated" (LIVE-4).
+func sourceClass(s sessions.Source) string {
 	if s == sessions.SourceMirror {
 		return string(sessions.SourceMirror)
 	}
 	return sourceSimulated
+}
+
+// sourceLabel is the text of a session's source pill: "real charger" or
+// "simulated" (VIEW-2).
+func sourceLabel(s sessions.Source) string {
+	if s == sessions.SourceMirror {
+		return sourceRealLabel
+	}
+	return sourceSimulated
+}
+
+// statusLabel is the status a page shows (VIEW-2). A mirror session that
+// SES-4 calls charging is only known to be occupied, so it reads "occupied";
+// every other status, and every API session's, is shown as it is.
+func statusLabel(src sessions.Source, status string) string {
+	if src == sessions.SourceMirror && status == sessions.StatusCharging {
+		return statusOccupied
+	}
+	return status
 }
 
 // showsCharger reports whether a session's page shows its charger's details
@@ -200,57 +220,6 @@ func showsCharger(s sessions.Session) bool { return s.Source == sessions.SourceM
 // chargerPower formats a charger's rated power and current, e.g. "7.4 kW AC".
 func chargerPower(c *store.ChargerRow) string {
 	return strings.TrimSpace(FormatKW(c.PowerW) + " " + c.Current)
-}
-
-func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
-	data, err := p.listData(r.Context())
-	if err != nil {
-		p.serverError(w, r, navSessions, "list page", err)
-		return
-	}
-	p.render(w, r, http.StatusOK, "list", data)
-}
-
-// listData builds the list page's data, which the list_body fragment also
-// uses. The totals add up the rows' int64 values and are formatted once.
-func (p *Pages) listData(ctx context.Context) (listPage, error) {
-	now := p.Now()
-	feed, err := p.feedLine(ctx, now, p.feedState())
-	if err != nil {
-		return listPage{}, err
-	}
-	items, err := p.Store.ListRecent(ctx, sessions.ListLimit)
-	if err != nil {
-		return listPage{}, fmt.Errorf("list sessions: %w", err)
-	}
-	data := listPage{layoutData: p.layout("Charging sessions", "view=list"), Notice: estimateNotice, Feed: feed, Rows: []listRow{}}
-	data.Nav = navSessions
-	var energyWh, costCents int64
-	for _, it := range items {
-		v, err := sessions.BuildView(it.Session, it.Readings, p.Tariff, now)
-		if err != nil {
-			return listPage{}, fmt.Errorf("build view: %w", err)
-		}
-		row := listRow{
-			ID:      v.Session.ID,
-			Charger: v.Session.ChargerID,
-			Source:  sourceLabel(v.Session.Source),
-			Started: p.clock(v.Session.StartedAt, true),
-			Ago:     FormatAgo(now.Sub(v.Session.StartedAt)),
-			Status:  v.Status,
-			Energy:  FormatWh(v.Bill.EnergyWh),
-			Cost:    FormatCents(v.Bill.TotalCents),
-		}
-		if c := it.Charger; c != nil && showsCharger(it.Session) {
-			row.Location = c.LocationName
-			row.Info = joinNonEmpty(" · ", c.Operator, chargerPower(c))
-		}
-		data.Rows = append(data.Rows, row)
-		energyWh += v.Bill.EnergyWh
-		costCents += v.Bill.TotalCents
-	}
-	data.TotalEnergy, data.TotalCost = FormatWh(energyWh), FormatCents(costCents)
-	return data, nil
 }
 
 // feedState loads the mirror's current state, or the zero state (mirror off)
@@ -349,15 +318,16 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 		stream = "view=session&id=" + url.QueryEscape(sess.ID)
 	}
 	data := detailPage{
-		layoutData: p.layout("Session "+sess.ChargerID, stream),
-		Charger:    sess.ChargerID,
-		Source:     sourceLabel(sess.Source),
-		Status:     v.Status,
-		Started:    p.clock(sess.StartedAt, true),
-		Stopped:    "-",
-		Energy:     FormatWh(v.Bill.EnergyWh),
-		Total:      FormatCents(v.Bill.TotalCents),
-		Legend:     barLegend{Peak: peakLegend(p.Tariff), OffPeak: offPeakLegend(p.Tariff)},
+		layoutData:  p.layout("Session "+sess.ChargerID, stream),
+		Charger:     sess.ChargerID,
+		SourceClass: sourceClass(sess.Source),
+		SourceLabel: sourceLabel(sess.Source),
+		Status:      v.Status,
+		Started:     p.clock(sess.StartedAt, true),
+		Stopped:     "-",
+		Energy:      FormatWh(v.Bill.EnergyWh),
+		Total:       FormatCents(v.Bill.TotalCents),
+		Legend:      barLegend{Peak: peakLegend(p.Tariff), OffPeak: offPeakLegend(p.Tariff)},
 	}
 	data.Nav = navSessions
 	if sess.StoppedAt != nil {

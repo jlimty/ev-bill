@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -43,7 +44,8 @@ func (p *Pages) RegisterEvents(mux *http.ServeMux) {
 	mux.HandleFunc("GET /events", p.events)
 }
 
-// events serves GET /events?view=list, GET /events?view=locations (LOC-7) and
+// events serves GET /events?view=list (with the list page's site, sort and
+// dir, NAV-5), GET /events?view=locations (LOC-7) and
 // GET /events?view=session&id=<uuid> as a server-sent event stream: the current fragment straight away, then a
 // re-rendered one after hub signals, at most one per renderGap, and a
 // heartbeat when idle (LIVE-1). Renders are shared between the streams on one
@@ -62,7 +64,12 @@ func (p *Pages) events(w http.ResponseWriter, r *http.Request) {
 	var render fragmentFunc
 	switch view {
 	case "list":
-		key, render = "list", p.listFragment
+		lq, ok := p.streamListQuery(w, r, q)
+		if !ok {
+			return
+		}
+		key = lq.cacheKey()
+		render = func(ctx context.Context) (fragment, error) { return p.listFragment(ctx, lq) }
 	case "locations":
 		key, render = "locations", p.locationsFragment
 	case "session":
@@ -108,6 +115,36 @@ func (p *Pages) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.stream(w, r, view, sub, first, p.cachedRender(key, 0, render))
+}
+
+// streamListQuery parses the list view's site, sort and dir as the page does
+// (NAV-5). An invalid value, a site no chargers row has, or a cursor (only
+// first pages are live) is a plain 400 that does not echo the input; a failed
+// site lookup is a 500. ok is false once it has answered.
+func (p *Pages) streamListQuery(w http.ResponseWriter, r *http.Request, v url.Values) (q listQuery, ok bool) {
+	q, err := parseListQuery(v)
+	if err == nil && q.Cursor != nil {
+		err = fmt.Errorf("%w: only first pages stream", errBadCursor)
+	}
+	if err != nil {
+		reqid.Logger(r.Context(), p.Logger).Info("bad list stream query", "error", err)
+		http.Error(w, "Bad list query.", http.StatusBadRequest)
+		return listQuery{}, false
+	}
+	if q.Site == "" {
+		return q, true
+	}
+	_, found, err := p.Store.SiteName(r.Context(), q.Site)
+	if err != nil {
+		reqid.Logger(r.Context(), p.Logger).Error("event stream failed", "op", "site name", "error", err)
+		http.Error(w, "Something went wrong.", http.StatusInternalServerError)
+		return listQuery{}, false
+	}
+	if !found {
+		http.Error(w, "Unknown site.", http.StatusBadRequest)
+		return listQuery{}, false
+	}
+	return q, true
 }
 
 // cachedRender renders key through the shared cache at the hub's current
@@ -205,10 +242,10 @@ func sendFragment(w http.ResponseWriter, rc *http.ResponseController, log *slog.
 
 // logRenderEnd logs a mid-stream render failure, which ends the stream. A
 // client that left (context.Canceled) or a session that was deleted
-// (sessions.ErrNotFound) is a normal end, logged at Info; anything else is an
-// Error.
+// (sessions.ErrNotFound) or a site that no longer has chargers rows
+// (errUnknownSite) is a normal end, logged at Info; anything else is an Error.
 func logRenderEnd(log *slog.Logger, err error) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, sessions.ErrNotFound) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, sessions.ErrNotFound) || errors.Is(err, errUnknownSite) {
 		log.Info("event stream ended", "reason", "render stopped", "error", err)
 		return
 	}
@@ -258,8 +295,9 @@ func eventFrame(event string, html []byte) []byte {
 	return b.Bytes()
 }
 
-func (p *Pages) listFragment(ctx context.Context) (fragment, error) {
-	data, err := p.listData(ctx)
+// listFragment renders the list's live section for q, a first page.
+func (p *Pages) listFragment(ctx context.Context, q listQuery) (fragment, error) {
+	data, err := p.listData(ctx, q)
 	if err != nil {
 		return fragment{}, err
 	}

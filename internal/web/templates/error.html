@@ -1,4 +1,4 @@
 {{define "content"}}
 <h1>{{.Heading}}</h1>
-<div class="card"><p>{{.Message}}</p><p><a href="/sessions">Back to all sessions</a></p></div>
+<div class="card"><p>{{.Message}}</p><p>{{if .LinkURL}}<a href="{{.LinkURL}}">{{.LinkText}}</a>{{else}}<a href="/sessions">Back to all sessions</a>{{end}}</p></div>
 {{end}}
