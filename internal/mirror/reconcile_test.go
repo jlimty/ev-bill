@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/jlimty/ev-bill/internal/billing"
 	"github.com/jlimty/ev-bill/internal/datamall"
 	"github.com/jlimty/ev-bill/internal/sessions"
@@ -65,6 +68,7 @@ func snapAt(at time.Time, conns ...datamall.Connector) datamall.Snapshot {
 // test sets.
 type harness struct {
 	t     *testing.T
+	pool  *pgxpool.Pool
 	st    *store.Store
 	clock time.Time
 	logs  *syncBuffer
@@ -74,7 +78,8 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{t: t, st: store.New(testdb.New(t))}
+	pool := testdb.New(t)
+	h := &harness{t: t, pool: pool, st: store.New(pool)}
 	h.log, h.logs = newLogger()
 	h.rec = h.reconciler(h.st)
 	return h
@@ -433,6 +438,7 @@ type fakeStore struct {
 	chargers map[string]store.ChargerRow
 	errs     map[string]error
 	starts   []string
+	samples  []store.OccupancySample
 	createFn func(chargerID string) error
 }
 
@@ -490,15 +496,16 @@ func (f *fakeStore) StopSession(context.Context, sessions.Source, string, billin
 	return sessions.Session{}, nil, false, f.errs["StopSession"]
 }
 
-func (f *fakeStore) UpsertChargers(_ context.Context, rows []store.ChargerRow) error {
+func (f *fakeStore) ApplyObservation(_ context.Context, rows []store.ChargerRow, samples []store.OccupancySample) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.errs["UpsertChargers"]; err != nil {
+	if err := f.errs["ApplyObservation"]; err != nil {
 		return err
 	}
 	for _, r := range rows {
 		f.chargers[r.ChargerID] = r
 	}
+	f.samples = append(f.samples, samples...)
 	return nil
 }
 
@@ -513,7 +520,7 @@ func (f *fakeStore) startCount() int {
 func TestReconcile_MIR6_StoreErrorsAbortCycle(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
-	for _, step := range []string{"LatestObservation", "ChargerStates", "OpenMirrorSessions", "LastMirrorStops", "UpsertChargers"} {
+	for _, step := range []string{"LatestObservation", "ChargerStates", "OpenMirrorSessions", "LastMirrorStops", "ApplyObservation"} {
 		t.Run(step, func(t *testing.T) {
 			t.Parallel()
 			fs := newFakeStore()
@@ -661,11 +668,13 @@ func TestReconcile_MIR7_APISkipLoggedAgainAfterMirrorStart(t *testing.T) {
 	}
 }
 
-// noUpsertStore is the real store whose UpsertChargers fails, as if the
+// noUpsertStore is the real store whose ApplyObservation fails, as if the
 // process died after the actions but before observed_at was written.
 type noUpsertStore struct{ *store.Store }
 
-func (noUpsertStore) UpsertChargers(context.Context, []store.ChargerRow) error { return errCut }
+func (noUpsertStore) ApplyObservation(context.Context, []store.ChargerRow, []store.OccupancySample) error {
+	return errCut
+}
 
 // MIR-12: when a cycle is cut after the 48 h stop but before Held is stored,
 // the next poll still holds the connector (from the durable stop row) and
@@ -784,5 +793,148 @@ func TestReconcile_MIR5_CutGapStillCarriesMeter(t *testing.T) {
 	requireStopped(t, ss[0], r0.Add(mins(5)), 616)
 	if next := ss[1].Session; !next.StartedAt.Equal(late) || next.MeterStartWh != 616 {
 		t.Fatalf("new session = %+v, want start at r0+3h05m carrying 616 Wh", next)
+	}
+}
+
+// connAt is a watched connector at a postal code, with a given status.
+func connAt(id, postal string, st datamall.Status) datamall.Connector {
+	c := ac(id, st)
+	c.PostalCode = postal
+	return c
+}
+
+// LOC-1: one sample per postal code present, counting the connectors'
+// statuses, sorted by postal code. A watched postal code with no connectors
+// in the snapshot gets no sample, never a 0/0/0 row.
+func TestSamples_LOC1(t *testing.T) {
+	t.Parallel()
+	conns := []datamall.Connector{
+		connAt("SG-1", "100002", datamall.Occupied),
+		connAt("SG-2", "100001", datamall.Available),
+		connAt("SG-3", "100001", datamall.Occupied),
+		connAt("SG-4", "100002", datamall.Unavailable),
+		connAt("SG-5", "100001", datamall.Unavailable),
+		connAt("SG-6", "100002", datamall.Occupied),
+		connAt("SG-7", "100001", datamall.Available),
+	}
+	got := Samples(conns, r0)
+	want := []store.OccupancySample{
+		{PostalCode: "100001", ObservedAt: r0, Occupied: 1, Available: 2, Unavailable: 1},
+		{PostalCode: "100002", ObservedAt: r0, Occupied: 2, Available: 0, Unavailable: 1},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Samples = %+v, want %+v (no sample for a postal code without connectors)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("sample %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if got := Samples(nil, r0); len(got) != 0 {
+		t.Errorf("Samples(no connectors) = %+v, want none", got)
+	}
+}
+
+// samples returns every stored occupancy sample, by time then postal code.
+func (h *harness) samples() []store.OccupancySample {
+	h.t.Helper()
+	rows, err := h.pool.Query(context.Background(), `SELECT postal_code, observed_at, occupied, available, unavailable
+		FROM occupancy_samples ORDER BY observed_at, postal_code`)
+	if err != nil {
+		h.t.Fatalf("query samples: %v", err)
+	}
+	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.OccupancySample, error) {
+		var s store.OccupancySample
+		err := row.Scan(&s.PostalCode, &s.ObservedAt, &s.Occupied, &s.Available, &s.Unavailable)
+		s.ObservedAt = s.ObservedAt.UTC()
+		return s, err
+	})
+	if err != nil {
+		h.t.Fatalf("scan samples: %v", err)
+	}
+	return list
+}
+
+func requireSamples(t *testing.T, got, want []store.OccupancySample) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("samples = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		w := want[i]
+		w.ObservedAt = w.ObservedAt.UTC()
+		if got[i] != w {
+			t.Fatalf("sample %d = %+v, want %+v", i, got[i], w)
+		}
+	}
+}
+
+// LOC-1: the first poll writes one sample per watched postal code. A repeated
+// feed writes none (MIR-3). A newer feed writes new samples, and a postal code
+// missing from it gets none.
+func TestReconcile_LOC1_SamplePerAppliedSnapshot(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	first := []datamall.Connector{
+		connAt("SG-A1", "100001", datamall.Occupied),
+		connAt("SG-A2", "100001", datamall.Available),
+		connAt("SG-B1", "100002", datamall.Unavailable),
+	}
+	h.apply(r0, first...)
+	want := []store.OccupancySample{
+		{PostalCode: "100001", ObservedAt: r0, Occupied: 1, Available: 1},
+		{PostalCode: "100002", ObservedAt: r0, Unavailable: 1},
+	}
+	requireSamples(t, h.samples(), want)
+
+	h.apply(r0, first...)
+	h.apply(r0, connAt("SG-A1", "100001", datamall.Available)) // same timestamp, new content
+	requireSamples(t, h.samples(), want)
+
+	t1 := r0.Add(mins(5))
+	h.apply(t1, connAt("SG-A1", "100001", datamall.Occupied), connAt("SG-A2", "100001", datamall.Occupied))
+	want = append(want, store.OccupancySample{PostalCode: "100001", ObservedAt: t1, Occupied: 2})
+	requireSamples(t, h.samples(), want)
+}
+
+// LOC-1, MIR-6: a cycle cut off part-way writes no sample, and the retry of
+// the same file writes it once.
+func TestReconcile_LOC1_CutCycleSampledOnce(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.apply(r0, connAt("SG-A", "100001", datamall.Occupied), connAt("SG-B", "100001", datamall.Occupied))
+
+	t1 := r0.Add(mins(5))
+	poll := []datamall.Connector{connAt("SG-A", "100001", datamall.Available), connAt("SG-B", "100001", datamall.Occupied)}
+	h.clock = t1
+	if _, err := h.reconciler(&cutStore{Store: h.st, failAt: 2}).Apply(context.Background(), snapAt(t1, poll...)); !errors.Is(err, errCut) {
+		t.Fatalf("cut cycle: err = %v, want the cut error", err)
+	}
+	r0Sample := store.OccupancySample{PostalCode: "100001", ObservedAt: r0, Occupied: 2}
+	requireSamples(t, h.samples(), []store.OccupancySample{r0Sample})
+
+	h.apply(t1, poll...)
+	h.apply(t1, poll...)
+	requireSamples(t, h.samples(), []store.OccupancySample{
+		r0Sample, {PostalCode: "100001", ObservedAt: t1, Occupied: 1, Available: 1},
+	})
+}
+
+// LOC-1, MIR-2: the counts cover only the watched connectors after the cap.
+func TestReconcile_LOC1_SamplesAfterCap(t *testing.T) {
+	t.Parallel()
+	fs := newFakeStore()
+	log, _ := newLogger()
+	r := &Reconciler{Store: fs, Now: func() time.Time { return r0 }, Logger: log, GapAfter: GapAfter}
+	conns := make([]datamall.Connector, 0, MaxConnectors+5)
+	for i := range MaxConnectors + 5 {
+		conns = append(conns, connAt(fmt.Sprintf("SG-%03d", i), "100001", datamall.Available))
+	}
+	if _, err := r.Apply(context.Background(), snapAt(r0, conns...)); err != nil {
+		t.Fatal(err)
+	}
+	want := []store.OccupancySample{{PostalCode: "100001", ObservedAt: r0, Available: MaxConnectors}}
+	if len(fs.samples) != 1 || fs.samples[0] != want[0] {
+		t.Fatalf("samples = %+v, want %+v", fs.samples, want)
 	}
 }
