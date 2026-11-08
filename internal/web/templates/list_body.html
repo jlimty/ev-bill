@@ -1,0 +1,8 @@
+{{define "list_body"}}{{range .Rows}}<tr>
+<td><a href="/sessions/{{.ID}}">{{.Charger}}</a></td>
+<td>{{.Started}}</td>
+<td><span class="badge {{.Status}}">{{.Status}}</span></td>
+<td class="num">{{.Energy}}</td>
+<td class="num">{{.Cost}}</td>
+</tr>
+{{end}}{{end}}

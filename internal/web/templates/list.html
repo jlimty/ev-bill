@@ -5,14 +5,7 @@
 <table>
 <thead><tr><th>Charger</th><th>Started</th><th>Status</th><th class="num">Energy</th><th class="num">Cost</th></tr></thead>
 <tbody>
-{{range .Rows}}<tr>
-<td><a href="/sessions/{{.ID}}">{{.Charger}}</a></td>
-<td>{{.Started}}</td>
-<td><span class="badge {{.Status}}">{{.Status}}</span></td>
-<td class="num">{{.Energy}}</td>
-<td class="num">{{.Cost}}</td>
-</tr>
-{{end}}</tbody>
+{{template "list_body" .}}</tbody>
 </table>
 {{else}}
 <p class="empty">No sessions yet. Sessions appear here as soon as a charger starts one.</p>

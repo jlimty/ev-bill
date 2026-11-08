@@ -39,10 +39,15 @@ func main() {
 	}
 }
 
+// maxStreams caps open GET /events streams (LIVE-1).
+const maxStreams = 100
+
 // run loads config, connects and migrates the database, then serves until ctx
-// is cancelled (OPS-1, OPS-3, OPS-4). The HTTP server, and the mirror's poller
-// and retention job when LTA_ACCOUNT_KEY is set, share one errgroup context:
-// cancelling ctx, or any of them failing, stops them all (MIR-11).
+// is cancelled (OPS-1, OPS-3, OPS-4). The HTTP server, the live hub, and the
+// mirror's poller and retention job when LTA_ACCOUNT_KEY is set, share one
+// errgroup context: cancelling ctx, or any of them failing, stops them all
+// (MIR-11). Stopping the hub ends every open stream, so the server's graceful
+// shutdown can finish.
 func run(ctx context.Context, getenv func(string) string, stdout io.Writer) error {
 	cfg, err := config.Load(getenv)
 	if err != nil {
@@ -67,7 +72,19 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	}
 
 	st := store.New(pool)
-	h := server.New(st, billing.SingaporeTariff(), cfg.APIKey, time.Now, logger)
+	feed := &live.Feed{}
+	feed.Store(live.FeedState{Enabled: cfg.LTAAccountKey != ""})
+	// The hub runs even with the mirror off, so streams still work.
+	hub := live.NewHub(maxStreams)
+	h := server.New(server.Deps{
+		Store:  st,
+		Tariff: billing.SingaporeTariff(),
+		APIKey: cfg.APIKey,
+		Now:    time.Now,
+		Logger: logger,
+		Hub:    hub,
+		Feed:   feed,
+	})
 
 	ln, err := net.Listen("tcp", ":"+cfg.Port)
 	if err != nil {
@@ -75,12 +92,11 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	}
 	logger.Info("server starting", "port", cfg.Port)
 
-	feed := &live.Feed{}
-	feed.Store(live.FeedState{Enabled: cfg.LTAAccountKey != ""})
 	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return hub.Run(gctx) })
 	g.Go(func() error { return server.Serve(gctx, ln, h, 10*time.Second, logger) })
 	if cfg.LTAAccountKey != "" {
-		poller := newPoller(cfg, st, feed, logger)
+		poller := newPoller(cfg, st, feed, hub.Publish, logger)
 		g.Go(func() error { return poller.Run(gctx) })
 		g.Go(func() error {
 			return mirror.RunRetention(gctx, st, mirror.RetentionEvery, mirror.RetentionKeep, time.Now, logger)
@@ -96,8 +112,9 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 }
 
 // newPoller builds the live mirror's poller from config (MIR-1, MIR-2). The
-// postal codes fall back to mirror.DefaultPostalCodes.
-func newPoller(cfg config.Config, st *store.Store, feed *live.Feed, logger *slog.Logger) *mirror.Poller {
+// postal codes fall back to mirror.DefaultPostalCodes. onChange runs after
+// each cycle that changed sessions (LIVE-2).
+func newPoller(cfg config.Config, st *store.Store, feed *live.Feed, onChange func(), logger *slog.Logger) *mirror.Poller {
 	codes := cfg.MirrorPostalCodes
 	if len(codes) == 0 {
 		codes = mirror.DefaultPostalCodes
@@ -118,6 +135,7 @@ func newPoller(cfg config.Config, st *store.Store, feed *live.Feed, logger *slog
 		PostalCodes: watched,
 		Interval:    mirror.PollInterval,
 		Feed:        feed,
+		OnChange:    onChange,
 		Logger:      logger,
 	}
 }

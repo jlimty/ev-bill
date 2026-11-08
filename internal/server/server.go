@@ -8,6 +8,7 @@ import (
 
 	"github.com/jlimty/ev-bill/internal/api"
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/live"
 	"github.com/jlimty/ev-bill/internal/store"
 	"github.com/jlimty/ev-bill/internal/web"
 )
@@ -31,19 +32,40 @@ func withDeadline(d time.Duration, next http.Handler) http.Handler {
 	})
 }
 
-// New builds the full handler: the JSON API, the status pages and
-// GET /healthz, all wrapped by a per-request deadline and, outermost, RequestLogger.
-func New(st *store.Store, t billing.Tariff, apiKey string, now func() time.Time, l *slog.Logger) http.Handler {
-	mux := http.NewServeMux()
-	(&api.Server{Store: st, Tariff: t, APIKey: apiKey, Now: now, Logger: l}).Register(mux)
-	(&web.Pages{Store: st, Tariff: t, Now: now, Logger: l}).Register(mux)
-	mux.Handle("GET /healthz", Health(st, healthTimeout, l))
-	return newHandler(l, mux, requestTimeout)
+// Deps is what the handler needs. Hub may be nil, which turns GET /events
+// into a 503; Feed is passed through to the pages.
+type Deps struct {
+	Store  *store.Store
+	Tariff billing.Tariff
+	APIKey string
+	Now    func() time.Time
+	Logger *slog.Logger
+	Hub    *live.Hub
+	Feed   *live.Feed
 }
 
-// newHandler wraps h in the per-request deadline, then RequestLogger so the
-// log line still has the real status. New passes requestTimeout; tests pass a
-// short one.
-func newHandler(l *slog.Logger, h http.Handler, timeout time.Duration) http.Handler {
-	return RequestLogger(l, withDeadline(timeout, h))
+// New builds the full handler: the JSON API, the status pages, GET /healthz
+// and the GET /events stream, with RequestLogger outermost.
+func New(d Deps) http.Handler {
+	return build(d, requestTimeout)
+}
+
+// build is New with the per-request deadline as a parameter, so tests can use
+// a short one. Every route except GET /events sits behind the deadline: the
+// inner mux holds them and is wrapped by withDeadline, while the outer mux
+// sends GET /events straight to the stream, which must outlive any deadline
+// (LIVE-1) and sets its own per-write deadlines instead. RequestLogger wraps
+// both, so every request, the stream included, gets one log line.
+func build(d Deps, timeout time.Duration) http.Handler {
+	pages := &web.Pages{Store: d.Store, Tariff: d.Tariff, Now: d.Now, Logger: d.Logger, Hub: d.Hub, Feed: d.Feed}
+
+	inner := http.NewServeMux()
+	(&api.Server{Store: d.Store, Tariff: d.Tariff, APIKey: d.APIKey, Now: d.Now, Logger: d.Logger}).Register(inner)
+	pages.Register(inner)
+	inner.Handle("GET /healthz", Health(d.Store, healthTimeout, d.Logger))
+
+	outer := http.NewServeMux()
+	pages.RegisterEvents(outer)
+	outer.Handle("/", withDeadline(timeout, inner))
+	return RequestLogger(d.Logger, outer)
 }
