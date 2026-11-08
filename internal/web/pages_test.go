@@ -532,8 +532,11 @@ func TestStatic_LIVE3_LiveJS(t *testing.T) {
 		t.Errorf("LIVE-3: live.js lacks the security headers: %v", rec.Header())
 	}
 	js := rec.Body.String()
-	wantContains(t, js, "EventSource", "/events?")
-	for _, banned := range []string{"eval(", "Function(", "document.write", "setAttribute('on", ".onclick"} {
+	wantContains(t, js, "EventSource", "/events?",
+		// A closed stream reloads the page once after 30 s, through a function
+		// passed to setTimeout, never a string (which would be eval).
+		"source.readyState !== EventSource.CLOSED", "setTimeout(function () { location.reload(); }, 30000)")
+	for _, banned := range []string{"eval(", "Function(", "document.write", "setAttribute('on", ".onclick", "setTimeout('", `setTimeout("`} {
 		if strings.Contains(js, banned) {
 			t.Errorf("LIVE-3: live.js contains %q", banned)
 		}

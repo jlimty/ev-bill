@@ -164,10 +164,11 @@ document.addEventListener('securitypolicyviolation', function (e) {
 });`
 
 // openBrowser launches headless Chromium and opens a page. When the test ends
-// it fails on any console error, uncaught page error or CSP violation. A
-// launch failure fails the test: it must never skip, or the test would pass
+// it fails on any console error, uncaught page error or CSP violation, except
+// console errors matching one of allowed, which a test expects. A launch
+// failure fails the test: it must never skip, or the test would pass
 // vacuously.
-func openBrowser(t *testing.T) (playwright.Page, playwright.PlaywrightAssertions) {
+func openBrowser(t *testing.T, allowed ...*regexp.Regexp) (playwright.Page, playwright.PlaywrightAssertions) {
 	t.Helper()
 	pw, err := playwright.Run()
 	if err != nil {
@@ -197,7 +198,7 @@ func openBrowser(t *testing.T) (playwright.Page, playwright.PlaywrightAssertions
 	var mu sync.Mutex
 	var consoleErrors []string
 	page.On("console", func(m playwright.ConsoleMessage) {
-		if m.Type() == "error" {
+		if m.Type() == "error" && !matchesAny(allowed, m.Text()) {
 			mu.Lock()
 			consoleErrors = append(consoleErrors, m.Text())
 			mu.Unlock()
@@ -231,9 +232,9 @@ func openBrowser(t *testing.T) (playwright.Page, playwright.PlaywrightAssertions
 	return page, expect
 }
 
-// TestStatusPages_LIVE3_UpdatesWithoutReload opens the list page, then makes
-// a mirror session appear through the store and the hub, as a reconcile cycle
-// does. The row must show up within 5 s without a reload: a marker set on the
+// TestStatusPages_LIVE3_UpdatesWithoutReload opens the list page and waits
+// for its stream to connect, then makes a mirror session appear through the
+// store and the hub, as a reconcile cycle does. The row must show up within 5 s without a reload: a marker set on the
 // page's window before the change is still there afterwards. It all runs
 // under the real CSP with no console errors or CSP violations.
 func TestStatusPages_LIVE3_UpdatesWithoutReload(t *testing.T) {
@@ -245,6 +246,10 @@ func TestStatusPages_LIVE3_UpdatesWithoutReload(t *testing.T) {
 	_, err := page.Goto(srv.URL + "/")
 	must(t, "open list", err)
 	must(t, "empty list", expect.Locator(page.Locator("tbody")).ToContainText("No sessions yet"))
+	// Wait until the stream is open and its first event applied, so the row
+	// below can only arrive through hub.Publish, not the first render.
+	must(t, "LIVE-3: stream connected", expect.Locator(page.Locator(`body[data-stream-state="connected"]`)).ToBeAttached())
+	must(t, "still empty", expect.Locator(page.Locator("tbody")).ToContainText("No sessions yet"))
 	_, err = page.Evaluate("() => { window.__marker = 1 }")
 	must(t, "set marker", err)
 
@@ -270,5 +275,59 @@ func TestStatusPages_LIVE3_UpdatesWithoutReload(t *testing.T) {
 	must(t, "read marker", err)
 	if n, ok := marker.(int); !ok || n != 1 {
 		t.Errorf("LIVE-3: window.__marker = %v (%T), want 1: the page reloaded", marker, marker)
+	}
+}
+
+func matchesAny(res []*regexp.Regexp, s string) bool {
+	for _, re := range res {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestStatusPages_LIVE3_ReloadsAfterStreamCloses opens a charging session's
+// page, then deletes the session and publishes. The stream ends, the browser
+// reconnects, and GET /events answers 404, which closes the EventSource for
+// good. live.js must then reload the page once, 30 s later, and not before.
+// The page's timers run on Playwright's fake clock, so the test does not wait
+// 30 s. The expected 404 console errors are allowed; nothing else is.
+func TestStatusPages_LIVE3_ReloadsAfterStreamCloses(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	st := store.New(pool)
+	sess, err := st.CreateSession(ctx, sessions.SourceAPI, "CP-GONE", sgt(7, 0, 15), 0, fixedNow())
+	must(t, "create session", err)
+	srv, hub := startServer(t, st)
+	page, expect := openBrowser(t, regexp.MustCompile(`status of 404`))
+	// Paused, the page's clock moves only when the test advances it.
+	must(t, "install clock", page.Context().Clock().Install())
+	must(t, "pause clock", page.Context().Clock().PauseAt(time.Now()))
+
+	_, err = page.Goto(srv.URL + "/sessions/" + sess.ID)
+	must(t, "open detail", err)
+	must(t, "LIVE-3: stream connected", expect.Locator(page.Locator(`body[data-stream-state="connected"]`)).ToBeAttached())
+	_, err = page.Evaluate("() => { window.__marker = 1 }")
+	must(t, "set marker", err)
+
+	_, err = pool.Exec(ctx, "DELETE FROM sessions WHERE id = $1", sess.ID)
+	must(t, "delete session", err)
+	hub.Publish()
+	must(t, "LIVE-3: stream closed", expect.Locator(page.Locator(`body[data-stream-state="closed"]`)).ToBeAttached())
+
+	must(t, "advance 29.999 s", page.Context().Clock().RunFor(29_999))
+	// A reload under way makes Evaluate fail ("execution context was
+	// destroyed"), so an error here also means the page reloaded too early.
+	marker, err := page.Evaluate("() => window.__marker")
+	if n, ok := marker.(int); err != nil || !ok || n != 1 {
+		t.Fatalf("LIVE-3: page reloaded before 30 s (marker = %v, err = %v)", marker, err)
+	}
+	must(t, "advance to 30 s", page.Context().Clock().RunFor(1))
+	must(t, "LIVE-3: reloaded to the 404 page", expect.Locator(page.Locator("h1")).ToHaveText("Session not found"))
+	marker, err = page.Evaluate("() => window.__marker")
+	must(t, "read marker after reload", err)
+	if marker != nil {
+		t.Errorf("LIVE-3: window.__marker = %v after the reload, want undefined", marker)
 	}
 }
