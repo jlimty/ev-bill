@@ -27,19 +27,30 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 21 | 2026-11-08 | Task 5, 8 / SES-1, API-2 | `started_at` had no lower bound, so a start in year 0 at +08:00 (year −1 in UTC) was stored; Go cannot encode that time as JSON, and because the handler wrote the status before encoding, every later list request returned an empty 200 | review | Starts before 2000-01-01 UTC are rejected with 422; JSON is encoded before the status is written, so an encoding failure is a logged 500 | Test: the year-0 start is rejected and the list stays valid |
 | 22 | 2026-11-08 | Task 11 / API-1 | The simulator used `$API_KEY` as the `-key` flag's default, so its usage text printed the key | review | The flag defaults to empty and falls back to the environment after parsing | Test: usage output never contains the key |
 | 23 | 2026-11-08 | Task 9 / UI-1, SES-4 | The status-page tests looked for the words "stale", "charging" and "completed", which always appear in the page's CSS, so a wrong status still passed | review (manual mutation) | Tests assert the rendered status badge element | Test, shown failing with a wrong status |
+| 24 | 2026-11-08 | Design / MIR-12, MIR-4 | The first draft of the live-mirror design did not say what happens when an occupancy outlasts the 48 h session limit (SES-5), and every restart would have split a session and billed the 60 kWh cap again | review (design check before planning) | MIR-12 (stop at 48 h, hold until free) and the cap applied per occupancy with the meter carried across splits | Spec rules plus planner tests |
+| 25 | 2026-11-08 | Mirror Task 2 / MIR-4 | `ParseKW` accepted a 0 W rating; one such feed record would have failed the `chargers.power_w > 0` CHECK on every poll and stalled the mirror | review | Ratings under 1 W are rejected and the connector is skipped | Test |
+| 26 | 2026-11-08 | Mirror Task 2 / MIR-1 | The AccountKey would have been forwarded if the EVCBatch endpoint redirected, because Go's HTTP client copies custom headers across hosts | review | The key-bearing request refuses redirects (on a copy of the caller's client) | Test: a redirect target never receives the key |
+| 27 | 2026-11-08 | Mirror Task 3 / MIR-12, SES-5 | The plan's decision table stopped a session at the observation time when its connector freed, even after 48 h, a stop the store rejects with `session_too_long` | review | The stop is clamped to `started_at + 48 h` | Test |
+| 28 | 2026-11-08 | Mirror Task 4 / MIR-7, MIR-4 | After a mirror start was skipped because an API session held the charger, a days-old mirror stop was later treated as part of the current occupancy, so the charger could be held wrongly or the old meter carried | review | Stops older than the charger's last stored observation are ignored | Test against the real database |
+| 29 | 2026-11-08 | Mirror plan / MIR-6 | The plan's expected meter value (1,233 Wh after 10 min at 7.4 kW) ignored per-step truncation; the code correctly gives 616 then 1,232 | pre-flight scan | Plan corrected before work started | None |
+| 30 | 2026-11-08 | Mirror Task 3 / process | Tests were written together with the code, skipping the failing-first run the plan asked for | implementer's own report | None needed; the review checks tests against the rules | None |
+| 31 | 2026-11-08 | Mirror Tasks 5–6 / LIVE-1, LIVE-2 | Every open stream re-rendered the page on every signal, with no sharing or throttle; at the 100-stream cap one 30 s tick cost about 1.3 CPU-s locally, enough to starve a 0.1 CPU free instance and its 10-connection pool | review (whole-branch) | One shared render per view per hub generation, a 2 s minimum gap per stream, and at most 2 renders at once | Tests: 100 streams give 1 render; a 50-signal burst gives at most 2 renders per stream |
+| 32 | 2026-11-08 | Mirror Task 2 / MIR-1 | The parser fully decoded all ~2,800 feed locations before filtering, so one wrong-typed field at any unwatched location would have failed every poll | review (whole-branch) | Only watched locations are fully decoded; a malformed watched location skips its connectors | Test: a numeric field at an unwatched location no longer fails the poll |
 
 ## Tally
 
-Rows counted by the "Caught by" column (23 rows):
+Rows counted by the "Caught by" column (32 rows):
 
 | Caught by | Rows | Count |
 |---|---|---|
-| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22 | 14 |
+| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 26, 27, 28, 31, 32 | 21 |
 | review (manual mutation) | 7, 12, 13, 16, 23 | 5 |
 | sonar | 4, 8, 19, 20 | 4 |
-| test, lint, scan, mutation | none | 0 |
+| scan (pre-flight scan of the plan) | 29 | 1 |
+| implementer's own report | 30 | 1 |
+| test, lint, mutation | none | 0 |
 
-Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17). Rows 3, 14 and 17 are "none" decisions; 14 and 17 give a reason, 3 does not.
+Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30). Rows 3, 14, 17, 29 and 30 are "none" decisions; 14, 17, 29 and 30 give a reason or note, 3 does not.
 
 ## Mutation baseline
 

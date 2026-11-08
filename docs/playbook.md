@@ -26,7 +26,7 @@ A new or changed gate must be shown failing first, including when its own tool i
 
 ## Where mistakes were caught
 
-Of 23 logged mistakes, review caught 19 (5 of them by manually mutating the code) and Sonar caught 4.
+Of 32 logged mistakes, review caught 26 (5 of them by manually mutating the code), Sonar caught 4, a pre-flight scan of the plan caught 1, and 1 came from the implementer's own report.
 
 ## From mistake to guardrail
 
@@ -41,3 +41,20 @@ Every log row records what went wrong, how it was caught, the fix, and a decisio
 ## Load run
 
 With a local server on port 18092 (Apple M5, Go 1.27.3, Postgres 18.4, a pool of 10 connections), `API_KEY=<key> go run ./cmd/simulator -url http://localhost:18092 -chargers 200 -speed 600 -duration 60m` sent 2,600 requests in about 6 s, all 2xx. Server-side `duration_ms`, in whole milliseconds: p50 1, p95 36, p99 40, max 42. Every request at or above the p95 was a session start; the 200 starts arrived within 40 ms of each other (p95 40), which is consistent with them waiting for the 10-connection pool, though pool wait was not measured. Meter values and stops had a p95 of 10. Render's free web service has 0.1 CPU, so these figures are a local baseline, not a production measurement.
+
+## Live mirror operations
+
+- **Set the key.** In the Render dashboard, open the `ev-billing` service, Environment, and set `LTA_ACCOUNT_KEY` to the DataMall AccountKey. `render.yaml` declares it with `sync: false`, so it is never committed. Saving triggers a deploy. Without it the mirror is off and the pages say "Live mirror off".
+- **Uptime monitor.** Create a monitor (for example on cron-job.org or UptimeRobot) for `https://ev-billing.onrender.com/healthz`, every 5 to 10 minutes. A free Render web service sleeps after 15 minutes without inbound traffic, and the poller sleeps with it; the monitor's requests keep it awake.
+- **Instance-hour budget.** Keeping the service awake all month uses 744 h of the 750 free instance hours in a 31-day month (31 × 24). That leaves 6 h, so `ev-billing` must stay the only free web service in the workspace.
+- **Database expiry.** The free Render Postgres expires about 8 December 2026 and is deleted 14 days later, with its data. There are no backups. Upgrade it or recreate the Blueprint's database before then.
+- **`/healthz` stays database-only.** It pings Postgres (2 s timeout) and nothing else. If it also checked DataMall, an outage there would fail the health check and Render would restart a healthy service. A stale or failing feed shows as a warning on the page's feed line instead.
+- **Sleep, deploys and restarts.** While the process is asleep, redeploying or restarting, nothing is polled. On the next successful poll, a mirror session whose connector was last observed more than 11 minutes earlier (2 poll intervals plus 1 minute) is closed at its last reading, and the gap is never billed (MIR-5). If the connector is still occupied, a new session continues the same occupancy, so the 60 kWh cap is not applied twice. A repeated or older batch file is ignored (MIR-3).
+- **`DATAMALL_BASE_URL`.** It is validated at startup even when the mirror is off, so a malformed value stops the server from starting.
+- **Post-deploy smoke check.** After a deploy:
+  1. Open https://ev-billing.onrender.com/.
+  2. The feed line shows a recent update, within one poll (5 minutes) of the deploy finishing.
+  3. A row changes without a reload within 10 minutes, which shows Render's proxy is not buffering `/events`.
+  4. `GET /healthz` returns 200.
+
+  Record the result here, with the date.

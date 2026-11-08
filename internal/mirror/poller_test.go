@@ -183,6 +183,38 @@ func TestPoller_MIR11_StopsOnCancel(t *testing.T) {
 	})
 }
 
+// MIR-1: a cycle has an overall deadline of one Interval. A fetch that hangs
+// fails the cycle when it expires: the failure is logged and recorded, and
+// polling carries on with the next cycle rather than stopping silently.
+func TestPoller_MIR1_HungCycleTimesOut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeFetcher{block: true}
+		p, logs := newPoller(f)
+		stop := runPoller(t, p)
+
+		time.Sleep(PollInterval - time.Nanosecond)
+		synctest.Wait()
+		if st := p.Feed.Load(); st.LastError != "" {
+			t.Fatalf("MIR-1: cycle failed before its deadline: %+v", st)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		st := p.Feed.Load()
+		if !strings.Contains(st.LastError, context.DeadlineExceeded.Error()) || !st.LastGood.IsZero() {
+			t.Fatalf("MIR-1: after a hung cycle: feed = %+v, want the timeout recorded as LastError", st)
+		}
+		if !strings.Contains(logs.String(), msgPollFailed) {
+			t.Errorf("MIR-1: hung cycle not logged as a failed poll; logs:\n%s", logs)
+		}
+		if n := f.count(); n != 2 {
+			t.Errorf("MIR-1: %d fetches after the timeout, want 2 (polling carries on)", n)
+		}
+		if err := stop(); err != nil {
+			t.Fatalf("Run = %v, want nil", err)
+		}
+	})
+}
+
 // LIVE-2: OnChange runs only after a cycle that changed something.
 func TestPoller_LIVE2_OnChangeOnlyWhenChanged(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

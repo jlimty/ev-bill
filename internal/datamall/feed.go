@@ -60,7 +60,7 @@ type Connector struct {
 type Snapshot struct {
 	UpdatedAt  time.Time   // LastUpdatedTime, read in the caller's location
 	Connectors []Connector // only the requested postal codes, sorted by ChargerID
-	Skipped    []string    // charger IDs dropped for a bad power rating, sorted
+	Skipped    []string    // charger IDs the parser left out (see Decode), sorted
 }
 
 const (
@@ -130,6 +130,10 @@ type feedLocation struct {
 // timestamp is read in loc (MIR-3). A connector whose rating does not parse
 // is left out and listed in Skipped (MIR-4), as is one whose current is not
 // AC or DC, one with an empty ID ("<empty>"), and any repeat of an ID (the first is kept).
+// Each location is checked for its postal code before it is decoded in full,
+// so a wrong-typed field in an unwatched location is ignored. One in a watched
+// location skips all of that location's connectors, listed in Skipped. Broken
+// JSON (a syntax error or a truncated file) is still an error (MIR-1).
 func Decode(r io.Reader, loc *time.Location, postalCodes map[string]bool) (Snapshot, error) {
 	var snap Snapshot
 	if loc == nil {
@@ -198,40 +202,105 @@ func decodeLocations(dec *json.Decoder, postalCodes map[string]bool, snap *Snaps
 		return fmt.Errorf("datamall: evLocationsData: %w", err)
 	}
 	for dec.More() {
-		var loc feedLocation
-		if err := dec.Decode(&loc); err != nil {
+		// Each location is read as raw JSON first, so a syntax error or a
+		// truncated file still fails the poll (MIR-1), but a wrong-typed field
+		// in one of the thousands of unwatched locations cannot (MIR-2).
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
 			return fmt.Errorf("datamall: location: %w", err)
 		}
-		if !postalCodes[loc.PostalCode] {
+		code, ok := postalCode(raw)
+		if !ok || !postalCodes[code] {
 			continue
 		}
-		for _, cp := range loc.ChargingPoints {
-			for _, pt := range cp.PlugTypes {
-				watts, werr := ParseKW(pt.PowerRating)
-				// The planner caps DC power, so an unknown current must never bill uncapped.
-				bad := werr != nil || (pt.Current != "AC" && pt.Current != "DC")
-				for _, id := range pt.EvIDs {
-					if id.EvCpID == "" {
-						snap.Skipped = append(snap.Skipped, "<empty>")
-						continue
-					}
-					if bad || seen[id.EvCpID] {
-						snap.Skipped = append(snap.Skipped, id.EvCpID)
-						continue
-					}
-					seen[id.EvCpID] = true
-					snap.Connectors = append(snap.Connectors, Connector{
-						ChargerID: id.EvCpID, LocationName: loc.Name, Address: loc.Address,
-						PostalCode: loc.PostalCode, Operator: cp.Operator, Position: cp.Position,
-						PlugType: pt.PlugType, Current: pt.Current, PowerW: watts,
-						Price: pt.Price, PriceType: pt.PriceType, Status: parseStatus(id.Status),
-					})
-				}
-			}
+		var loc feedLocation
+		if err := json.Unmarshal(raw, &loc); err != nil {
+			// raw is valid JSON, so this is a wrong-typed field in a watched
+			// location: none of its connectors can be trusted, so all of them
+			// are skipped.
+			snap.Skipped = append(snap.Skipped, locationIDs(raw, code)...)
+			continue
 		}
+		addLocation(&loc, seen, snap)
 	}
 	if err := expectDelim(dec, ']'); err != nil {
 		return fmt.Errorf("datamall: evLocationsData: %w", err)
 	}
 	return nil
+}
+
+// postalCode reads only a location's postal code. ok is false when it is not
+// a string, or the location is not an object, so the location cannot match.
+func postalCode(raw json.RawMessage) (code string, ok bool) {
+	var head struct {
+		PostalCode string `json:"postalCode"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return "", false
+	}
+	return head.PostalCode, true
+}
+
+// locationIDs lists the charger IDs of a watched location that failed to
+// decode, for Snapshot.Skipped. If even the IDs cannot be read, it lists the
+// location as "<postal CODE>".
+func locationIDs(raw json.RawMessage, code string) []string {
+	var ids struct {
+		ChargingPoints []struct {
+			PlugTypes []struct {
+				EvIDs []struct {
+					EvCpID string `json:"evCpId"`
+				} `json:"evIds"`
+			} `json:"plugTypes"`
+		} `json:"chargingPoints"`
+	}
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return []string{"<postal " + code + ">"}
+	}
+	var out []string
+	for _, cp := range ids.ChargingPoints {
+		for _, pt := range cp.PlugTypes {
+			for _, id := range pt.EvIDs {
+				if id.EvCpID == "" {
+					out = append(out, "<empty>")
+					continue
+				}
+				out = append(out, id.EvCpID)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return []string{"<postal " + code + ">"}
+	}
+	return out
+}
+
+// addLocation adds a watched location's connectors to snap. A connector whose
+// rating does not parse or whose current is not AC or DC (MIR-4), with an
+// empty ID, or with an ID already seen is listed in Skipped instead.
+func addLocation(loc *feedLocation, seen map[string]bool, snap *Snapshot) {
+	for _, cp := range loc.ChargingPoints {
+		for _, pt := range cp.PlugTypes {
+			watts, werr := ParseKW(pt.PowerRating)
+			// The planner caps DC power, so an unknown current must never bill uncapped.
+			bad := werr != nil || (pt.Current != "AC" && pt.Current != "DC")
+			for _, id := range pt.EvIDs {
+				if id.EvCpID == "" {
+					snap.Skipped = append(snap.Skipped, "<empty>")
+					continue
+				}
+				if bad || seen[id.EvCpID] {
+					snap.Skipped = append(snap.Skipped, id.EvCpID)
+					continue
+				}
+				seen[id.EvCpID] = true
+				snap.Connectors = append(snap.Connectors, Connector{
+					ChargerID: id.EvCpID, LocationName: loc.Name, Address: loc.Address,
+					PostalCode: loc.PostalCode, Operator: cp.Operator, Position: cp.Position,
+					PlugType: pt.PlugType, Current: pt.Current, PowerW: watts,
+					Price: pt.Price, PriceType: pt.PriceType, Status: parseStatus(id.Status),
+				})
+			}
+		}
+	}
 }

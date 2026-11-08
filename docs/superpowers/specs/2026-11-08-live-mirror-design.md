@@ -197,7 +197,7 @@ Sleep is still handled correctly (MIR-5), because deploys, restarts and feed out
 
 ## Left to implementation
 
-- Package layout. One candidate: `internal/datamall` (client and parser), `internal/mirror` (reconciler and retention) and `internal/live` (hub and SSE handler).
+- Package layout. One option: `internal/datamall` (client and parser), `internal/mirror` (reconciler and retention) and `internal/live` (hub and SSE handler).
 - The exact default postal-code list, chosen from a current batch file against MIR-2's criteria.
 - The SSE event names and payload framing.
 - Whether the detail page streams too, or keeps a meta refresh.

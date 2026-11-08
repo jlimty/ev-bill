@@ -290,10 +290,26 @@ func matchesAny(res []*regexp.Regexp, s string) bool {
 // TestStatusPages_LIVE3_ReloadsAfterStreamCloses opens a charging session's
 // page, then deletes the session and publishes. The stream ends, the browser
 // reconnects, and GET /events answers 404, which closes the EventSource for
-// good. live.js must then reload the page once, 30 s later, and not before.
-// The page's timers run on Playwright's fake clock, so the test does not wait
-// 30 s. The expected 404 console errors are allowed; nothing else is.
+// good. live.js must then reload the page once, 30 s plus a random 0–15 s
+// later, and not before. Math.random is pinned for each case, so the reload
+// time is exact: at 30 s with 0, and just under 45 s with 0.999. The page's
+// timers run on Playwright's fake clock, so the test does not wait. The
+// expected 404 console errors are allowed; nothing else is.
 func TestStatusPages_LIVE3_ReloadsAfterStreamCloses(t *testing.T) {
+	for _, tc := range []struct {
+		random  string
+		delayMs int
+	}{
+		{"0", 30_000},
+		{"0.999", 30_000 + 14_985},
+	} {
+		t.Run("random="+tc.random, func(t *testing.T) {
+			reloadsAfterStreamCloses(t, tc.random, tc.delayMs)
+		})
+	}
+}
+
+func reloadsAfterStreamCloses(t *testing.T, random string, delayMs int) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	st := store.New(pool)
@@ -301,6 +317,8 @@ func TestStatusPages_LIVE3_ReloadsAfterStreamCloses(t *testing.T) {
 	must(t, "create session", err)
 	srv, hub := startServer(t, st)
 	page, expect := openBrowser(t, regexp.MustCompile(`status of 404`))
+	pin := "Math.random = function () { return " + random + "; };"
+	must(t, "pin Math.random", page.AddInitScript(playwright.Script{Content: &pin}))
 	// Paused, the page's clock moves only when the test advances it.
 	must(t, "install clock", page.Context().Clock().Install())
 	must(t, "pause clock", page.Context().Clock().PauseAt(time.Now()))
@@ -316,18 +334,53 @@ func TestStatusPages_LIVE3_ReloadsAfterStreamCloses(t *testing.T) {
 	hub.Publish()
 	must(t, "LIVE-3: stream closed", expect.Locator(page.Locator(`body[data-stream-state="closed"]`)).ToBeAttached())
 
-	must(t, "advance 29.999 s", page.Context().Clock().RunFor(29_999))
+	must(t, "advance to 1 ms before the reload", page.Context().Clock().RunFor(delayMs-1))
 	// A reload under way makes Evaluate fail ("execution context was
 	// destroyed"), so an error here also means the page reloaded too early.
 	marker, err := page.Evaluate("() => window.__marker")
 	if n, ok := marker.(int); err != nil || !ok || n != 1 {
-		t.Fatalf("LIVE-3: page reloaded before 30 s (marker = %v, err = %v)", marker, err)
+		t.Fatalf("LIVE-3: page reloaded before %v ms (marker = %v, err = %v)", delayMs, marker, err)
 	}
-	must(t, "advance to 30 s", page.Context().Clock().RunFor(1))
+	must(t, "advance to the reload", page.Context().Clock().RunFor(1))
 	must(t, "LIVE-3: reloaded to the 404 page", expect.Locator(page.Locator("h1")).ToHaveText("Session not found"))
 	marker, err = page.Evaluate("() => window.__marker")
 	must(t, "read marker after reload", err)
 	if marker != nil {
 		t.Errorf("LIVE-3: window.__marker = %v after the reload, want undefined", marker)
 	}
+}
+
+// TestStatusPages_LIVE1_DoneClosesWithoutReload opens a charging session's
+// page, then stops the session and publishes. The stream sends the completed
+// fragment and a done event, and live.js closes the EventSource: the page
+// shows the completed session, and does not reload even long after 45 s,
+// which a closed stream without done would. No console errors.
+func TestStatusPages_LIVE1_DoneClosesWithoutReload(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(testdb.New(t))
+	sess, err := st.CreateSession(ctx, sessions.SourceAPI, "CP-STOP", sgt(7, 0, 15), 0, fixedNow())
+	must(t, "create session", err)
+	srv, hub := startServer(t, st)
+	page, expect := openBrowser(t)
+	must(t, "install clock", page.Context().Clock().Install())
+	must(t, "pause clock", page.Context().Clock().PauseAt(time.Now()))
+
+	_, err = page.Goto(srv.URL + "/sessions/" + sess.ID)
+	must(t, "open detail", err)
+	must(t, "LIVE-3: stream connected", expect.Locator(page.Locator(`body[data-stream-state="connected"]`)).ToBeAttached())
+	_, err = page.Evaluate("() => { window.__marker = 1 }")
+	must(t, "set marker", err)
+
+	_, _, _, err = st.StopSession(ctx, sessions.SourceAPI, sess.ID, billing.Reading{At: sgt(7, 0, 18), MeterWh: 1500}, fixedNow())
+	must(t, "stop session", err)
+	hub.Publish()
+	must(t, "LIVE-1: done received", expect.Locator(page.Locator(`body[data-stream-state="done"]`)).ToBeAttached())
+	must(t, "LIVE-1: completed fragment applied", expect.Locator(page.Locator(`[data-live="session"] .badge`)).ToHaveText("completed"))
+
+	must(t, "advance 60 s", page.Context().Clock().RunFor(60_000))
+	marker, err := page.Evaluate("() => window.__marker")
+	if n, ok := marker.(int); err != nil || !ok || n != 1 {
+		t.Fatalf("LIVE-1: page reloaded after done (marker = %v, err = %v)", marker, err)
+	}
+	must(t, "LIVE-1: still done", expect.Locator(page.Locator(`body[data-stream-state="done"]`)).ToBeAttached())
 }
