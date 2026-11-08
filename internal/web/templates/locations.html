@@ -1,16 +1,5 @@
 {{define "content"}}
 <h1>Locations</h1>
 <div data-live="locations">{{template "locations_body" .}}</div>
-<section class="key" aria-label="Legend">
-<ul class="legend">
-<li><span class="cell busy"></span>busy</li>
-<li><span class="cell free"></span>free</li>
-<li><span class="cell out"></span>out of service</li>
-<li><span class="cell busy muted"></span>last known, feed not live</li>
-<li><span class="swatch peak"></span>{{.Legend.Peak}}</li>
-<li><span class="swatch offpeak"></span>{{.Legend.OffPeak}}</li>
-<li><span class="swatch nodata"></span>no data</li>
-</ul>
 <p class="notice">{{.Notice}}</p>
-</section>
 {{end}}

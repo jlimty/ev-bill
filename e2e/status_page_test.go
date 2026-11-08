@@ -531,7 +531,7 @@ func TestLocations_LOC7_UpdatesWithoutReload(t *testing.T) {
 	hub.Publish()
 
 	must(t, "LOC-7: cell turns busy", expect.Locator(cell).ToHaveClass("cell busy", playwright.LocatorAssertionsToHaveClassOptions{Timeout: playwright.Float(5000)}))
-	must(t, "LOC-5: count", expect.Locator(page.Locator(`[data-live="locations"] .count`)).ToHaveText("as of 00:15 · 1 busy · 0 free"))
+	must(t, "LOC-5: count", expect.Locator(page.Locator(`[data-live="locations"] .count`)).ToHaveText("As of 00:15: 1 busy · 0 free"))
 
 	marker, err := page.Evaluate("() => window.__marker")
 	must(t, "read marker", err)

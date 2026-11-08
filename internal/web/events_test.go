@@ -777,7 +777,7 @@ func TestEvents_LOC7_LocationsView(t *testing.T) {
 
 	c := openStream(t, e.srv, "/events?view=locations")
 	first := c.mustNext("locations")
-	wantContains(t, first, "<h2>Alpha Mall</h2>", `<li class="cell free" title="A-001 · 22 kW AC · Type 2 · free"></li>`)
+	wantContains(t, first, "<h2>Alpha Mall</h2>", `<li class="cell free" data-key="A-001" data-watch title="A-001 · 22 kW AC · Type 2 · free"></li>`)
 	if page := e.get("/").Body.String(); !strings.Contains(page, `<div data-live="locations">`+first) {
 		t.Errorf("LOC-7: locations event is not the content of the swapped element:\nevent: %s\npage: %s", first, page)
 	}
@@ -790,7 +790,7 @@ func TestEvents_LOC7_LocationsView(t *testing.T) {
 	before := e.p.renders.renders.Load()
 	e.hub.Publish()
 	for _, s := range []*sseClient{c, other} {
-		wantContains(t, s.mustNext("locations"), `<li class="cell busy" title="A-001 · 22 kW AC · Type 2 · busy"></li>`)
+		wantContains(t, s.mustNext("locations"), `<li class="cell busy" data-key="A-001" data-watch title="A-001 · 22 kW AC · Type 2 · busy"></li>`)
 	}
 	if n := e.p.renders.renders.Load() - before; n != 1 {
 		t.Errorf("LIVE-2: one Publish to 2 locations streams made %d renders, want 1", n)

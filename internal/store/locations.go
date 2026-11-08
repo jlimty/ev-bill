@@ -17,6 +17,7 @@ import (
 // estimated energy and value at today's posted price (LOC-6).
 type LocationAggregate struct {
 	PostalCode, Name string
+	Also             []string     // the site's other location names, distinct and sorted (VIEW-5)
 	Operators        []string     // distinct, sorted
 	Chargers         []ChargerRow // current scope, sorted by charger_id
 
@@ -34,7 +35,7 @@ type HourAggregate struct {
 
 // scopeSQL selects the chargers of the newest observation: LOC-5's current
 // scope. Rows come sorted by site, then charger_id, which gives the site
-// order, the charger order and each site's name (its first row). COLLATE "C"
+// order and the charger order. COLLATE "C"
 // sorts charger IDs by byte, as Go does, whatever the database's locale: under
 // en_US.UTF-8 "AB1" would otherwise sort before "AB-2".
 const scopeSQL = `SELECT ` + chargerColumns + ` FROM chargers
@@ -90,8 +91,9 @@ func (s *Store) Locations(ctx context.Context, since time.Time) ([]LocationAggre
 	return out, nil
 }
 
-// locationScope loads the current scope into one aggregate per site and maps
-// each charger_id to its site's index.
+// locationScope loads the current scope into one aggregate per site, named
+// by locations.SiteNames (VIEW-5), and maps each charger_id to its site's
+// index.
 func (s *Store) locationScope(ctx context.Context) ([]LocationAggregate, map[string]int, error) {
 	rows, err := s.pool.Query(ctx, scopeSQL)
 	if err != nil {
@@ -105,7 +107,7 @@ func (s *Store) locationScope(ctx context.Context) ([]LocationAggregate, map[str
 	siteOf := make(map[string]int, len(chargers))
 	for _, c := range chargers {
 		if len(out) == 0 || out[len(out)-1].PostalCode != c.PostalCode {
-			out = append(out, LocationAggregate{PostalCode: c.PostalCode, Name: c.LocationName})
+			out = append(out, LocationAggregate{PostalCode: c.PostalCode})
 		}
 		site := &out[len(out)-1]
 		site.Chargers = append(site.Chargers, c)
@@ -116,6 +118,12 @@ func (s *Store) locationScope(ctx context.Context) ([]LocationAggregate, map[str
 	}
 	for i := range out {
 		slices.Sort(out[i].Operators)
+		// VIEW-5: the name is computed once, here, so every page agrees.
+		names := make([]string, len(out[i].Chargers))
+		for j, c := range out[i].Chargers {
+			names[j] = c.LocationName
+		}
+		out[i].Name, out[i].Also = locations.SiteNames(names)
 	}
 	return out, siteOf, nil
 }
