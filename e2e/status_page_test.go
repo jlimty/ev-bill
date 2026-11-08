@@ -88,41 +88,140 @@ func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 	must(t, "click CP-01", doneRow.GetByRole("link", playwright.LocatorGetByRoleOptions{Name: "CP-01"}).Click())
 	must(t, "detail URL", expect.Page(page).ToHaveURL(regexp.MustCompile(`/sessions/[0-9a-f-]+$`)))
 
-	// BIL-5: one row per tariff window with energy and cost.
+	// BIL-5: one row per tariff window with energy and cost. The window is the row header.
 	rows := page.Locator("tbody tr")
 	must(t, "row count", expect.Locator(rows).ToHaveCount(2))
-	must(t, "peak label", expect.Locator(rows.Nth(0).Locator("td").Nth(0)).ToHaveText("Peak"))
-	must(t, "peak energy", expect.Locator(rows.Nth(0).Locator("td").Nth(2)).ToHaveText("9.6 kWh"))
-	must(t, "peak cost", expect.Locator(rows.Nth(0).Locator("td").Nth(4)).ToHaveText("$5.95"))
-	must(t, "off-peak label", expect.Locator(rows.Nth(1).Locator("td").Nth(0)).ToHaveText("Off-peak"))
-	must(t, "off-peak energy", expect.Locator(rows.Nth(1).Locator("td").Nth(2)).ToHaveText("8.4 kWh"))
-	must(t, "off-peak cost", expect.Locator(rows.Nth(1).Locator("td").Nth(4)).ToHaveText("$4.03"))
+	must(t, "peak label", expect.Locator(rows.Nth(0).Locator("th")).ToHaveText("Peak"))
+	must(t, "peak energy", expect.Locator(rows.Nth(0).Locator("td").Nth(1)).ToHaveText("9.6 kWh"))
+	must(t, "peak rate", expect.Locator(rows.Nth(0).Locator("td").Nth(2)).ToHaveText("62¢/kWh"))
+	must(t, "peak cost", expect.Locator(rows.Nth(0).Locator("td").Nth(3)).ToHaveText("$5.95"))
+	must(t, "off-peak label", expect.Locator(rows.Nth(1).Locator("th")).ToHaveText("Off-peak"))
+	must(t, "off-peak energy", expect.Locator(rows.Nth(1).Locator("td").Nth(1)).ToHaveText("8.4 kWh"))
+	must(t, "off-peak cost", expect.Locator(rows.Nth(1).Locator("td").Nth(3)).ToHaveText("$4.03"))
 	must(t, "total", expect.Locator(page.Locator("tfoot td.num").Last()).ToHaveText("$9.98"))
 
-	// UI-2: the boundary times appear on the bar.
-	bar := page.Locator("ol.bar")
-	for _, tm := range []string{"21:40", "23:00", "00:15"} {
-		must(t, "boundary "+tm, expect.Locator(bar).ToContainText(tm))
+	// VIEW-4: the tariff boundaries are labelled on the axis (07:00 to 07:00 across midnight, so dated).
+	ticks := page.Locator("ol.axis-ticks")
+	for _, tm := range []string{"06 Nov 07:00", "06 Nov 23:00", "07 Nov 07:00"} {
+		must(t, "boundary "+tm, expect.Locator(ticks).ToContainText(tm))
 	}
 
-	// UI-2: inline widths apply under the CSP. 80 minutes of 155 is 51.6%, 75 of 155 is 48.4%.
-	segs := page.Locator("ol.bar > li.seg")
-	must(t, "segment count", expect.Locator(segs).ToHaveCount(2))
-	barBox, err := bar.BoundingBox()
-	must(t, "bar box", err)
-	for i, want := range []float64{51.6, 48.4} {
-		li := segs.Nth(i)
+	// VIEW-4: inline widths apply under the CSP. Of the 24 h axis, 21:40-23:00 is 5.56%
+	// and 23:00-00:15 is 5.21%; the empty track around them takes the rest.
+	axis := page.Locator("ol.axis")
+	pieces := axis.Locator("> li")
+	must(t, "piece count", expect.Locator(pieces).ToHaveCount(4))
+	axisBox, err := axis.BoundingBox()
+	must(t, "axis box", err)
+	for i, want := range []float64{61.11, 5.56, 5.21, 28.12} {
+		li := pieces.Nth(i)
 		inline, err := li.GetAttribute("style")
-		must(t, "segment style", err)
-		if wantStyle := fmt.Sprintf("width: %.1f%%", want); !strings.Contains(inline, wantStyle) {
-			t.Errorf("segment %d inline style = %q, want %q", i, inline, wantStyle)
+		must(t, "piece style", err)
+		if wantStyle := fmt.Sprintf("width:%.2f%%", want); !strings.Contains(inline, wantStyle) {
+			t.Errorf("piece %d inline style = %q, want %q", i, inline, wantStyle)
 		}
 		box, err := li.BoundingBox()
-		must(t, "segment box", err)
-		// The flex gap takes 2px, so compare against the bar minus the gap with a small tolerance.
-		got := box.Width / (barBox.Width - 2) * 100
+		must(t, "piece box", err)
+		got := box.Width / axisBox.Width * 100
 		if got < want-0.5 || got > want+0.5 {
-			t.Errorf("segment %d rendered width = %.2f%% of the bar, want %v%% (CSP may be blocking inline styles)", i, got, want)
+			t.Errorf("piece %d rendered width = %.2f%% of the axis, want %v%% (CSP may be blocking inline styles)", i, got, want)
+		}
+	}
+}
+
+// TestDetail_VIEW4_TicksAlignWithPieces checks, at 320 px, that a piece
+// narrower than the 2% minimum renders at exactly its width: the axis has a
+// 1-minute peak piece at its start and a short trailing track, and every tick
+// must sit on the edge between the pieces it labels, with no clipping.
+func TestDetail_VIEW4_TicksAlignWithPieces(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(testdb.New(t))
+	long, err := st.CreateSession(ctx, sessions.SourceAPI, "CP-LONG", sgt(4, 22, 59), 0, fixedNow())
+	must(t, "create session", err)
+	_, _, _, err = st.StopSession(ctx, sessions.SourceAPI, long.ID, billing.Reading{At: sgt(6, 22, 50), MeterWh: 50000}, fixedNow())
+	must(t, "stop session", err)
+
+	srv, _ := startServer(t, st)
+	page, _ := openBrowser(t)
+	must(t, "resize", page.SetViewportSize(320, 900))
+	_, err = page.Goto(srv.URL + "/sessions/" + long.ID)
+	must(t, "open detail", err)
+
+	raw, err := page.Evaluate(`() => {
+		const ax = document.querySelector('ol.axis').getBoundingClientRect();
+		const pieces = [...document.querySelectorAll('ol.axis > li')].map(l => l.getBoundingClientRect());
+		return {
+			left: ax.left, width: ax.width,
+			pieceLefts: pieces.map(r => r.left), pieceRights: pieces.map(r => r.right),
+			ticks: [...document.querySelectorAll('ol.axis-ticks > li')].map(l => parseFloat(l.style.left)),
+			styles: [...document.querySelectorAll('ol.axis > li')].map(l => parseFloat(l.style.width)),
+		};
+	}`)
+	must(t, "measure axis", err)
+	m, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("measure axis returned %T", raw)
+	}
+	nums := func(key string) []float64 {
+		vs, _ := m[key].([]any)
+		out := make([]float64, len(vs))
+		for i, v := range vs {
+			switch n := v.(type) {
+			case float64:
+				out[i] = n
+			case int:
+				out[i] = float64(n)
+			default:
+				t.Fatalf("measure axis: %s[%d] is %T", key, i, v)
+			}
+		}
+		return out
+	}
+	scalar := func(key string) float64 {
+		switch v := m[key].(type) {
+		case float64:
+			return v
+		case int:
+			return float64(v)
+		}
+		t.Fatalf("measure axis: %s is %T", key, m[key])
+		return 0
+	}
+	axisLeft, axisWidth := scalar("left"), scalar("width")
+	lefts, rights, ticks, styles := nums("pieceLefts"), nums("pieceRights"), nums("ticks"), nums("styles")
+	if len(lefts) < 3 {
+		t.Fatalf("want at least 3 pieces, got %d", len(lefts))
+	}
+
+	const tol = 1.0 // px
+	narrowest := styles[0]
+	for i, w := range styles {
+		got := (rights[i] - lefts[i]) / axisWidth * 100
+		if d := got - w; d < -tol/axisWidth*100 || d > tol/axisWidth*100 {
+			t.Errorf("piece %d renders %.2f%% of the axis, its style says %.2f%%", i, got, w)
+		}
+		if w < narrowest {
+			narrowest = w
+		}
+	}
+	if narrowest >= 2.5 {
+		t.Errorf("the test needs a piece near the 2%% minimum, narrowest is %.2f%%", narrowest)
+	}
+	if end := axisLeft + axisWidth; rights[len(rights)-1] < end-tol || rights[len(rights)-1] > end+tol {
+		t.Errorf("pieces end at %.1f, axis ends at %.1f (clipped or short)", rights[len(rights)-1], end)
+	}
+	// Each tick is the cumulative width before it: the left edge of some piece (or the axis end).
+	edges := append(append([]float64{}, lefts...), axisLeft+axisWidth)
+	for _, pct := range ticks {
+		x := axisLeft + pct/100*axisWidth
+		found := false
+		for _, e := range edges {
+			if d := e - x; d > -tol && d < tol {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("tick at %.2f%% (x=%.1f) is not on a piece edge %v", pct, x, edges)
 		}
 	}
 }

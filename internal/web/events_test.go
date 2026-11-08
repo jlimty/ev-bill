@@ -171,7 +171,7 @@ func TestEvents_LIVE1_StreamMatchesPage(t *testing.T) {
 	if page := e.get("/sessions/" + id).Body.String(); !strings.Contains(page, detail) {
 		t.Errorf("LIVE-1: session event is not part of the detail page:\nevent: %s\npage: %s", detail, page)
 	}
-	wantContains(t, detail, badge("completed"), `style="width: 51.6%"`, "$9.98")
+	wantContains(t, detail, badge("completed"), `style="width:5.56%"`, "$9.98")
 }
 
 // LIVE-1: a session stream re-renders the session's live section on Publish.
@@ -179,11 +179,11 @@ func TestEvents_LIVE1_SessionUpdates(t *testing.T) {
 	e := newStreamEnv(t, 100, nil)
 	id := e.start("CP-01", sgt(0, 15, 7))
 	c := openStream(t, e.srv, "/events?view=session&id="+id)
-	wantContains(t, c.mustNext("session"), "No readings yet", badge("charging"))
+	wantContains(t, c.mustNext("session"), "No meter readings yet", badge("charging"))
 
 	e.reading(id, sgt(0, 18, 7), 1500)
 	e.hub.Publish()
-	wantContains(t, c.mustNext("session"), "1.5 kWh", `class="bar"`)
+	wantContains(t, c.mustNext("session"), "1.5 kWh", `class="axis"`)
 }
 
 // LIVE-1: each write sets its own deadline, so the server's WriteTimeout (10 s

@@ -38,12 +38,34 @@ tfoot td { font-weight:700; border-bottom:0; }
 dl { display:grid; grid-template-columns:max-content 1fr; gap:.25rem 1rem; margin:0; }
 dt { color:var(--muted); }
 dd { margin:0; }
-.bar { display:flex; list-style:none; margin:0; padding:0; gap:2px; }
-.seg { min-width:0; }
-.seg .block { padding:.5rem; border-radius:4px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.seg .times { font-size:.85rem; line-height:1.3; color:var(--muted); padding-top:.25rem; white-space:normal; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
-.seg.peak .block { background:var(--peak); color:var(--peak-ink); }
-.seg.offpeak .block { background:var(--off); color:var(--off-ink); }
+.summary { margin:0 0 1rem; font-size:1.125rem; font-weight:600; font-variant-numeric:tabular-nums; max-width:65ch; }
+.axis { display:flex; height:2.25rem; list-style:none; margin:0; padding:0; border-radius:4px; overflow:hidden; }
+/* Pieces take no padding or border, so each renders at exactly its width and the ticks line up. */
+.axis li { position:relative; flex:none; min-width:0; overflow:hidden; white-space:nowrap; padding:0; font-size:.85rem; font-weight:700; line-height:2.25rem; }
+.axis .lbl { display:block; padding:0 .5rem; }
+.axis li + li { box-shadow:inset 2px 0 0 var(--card); }
+.axis .peak { background:var(--peak); color:var(--peak-ink); }
+.axis .offpeak { background:var(--off); color:var(--off-ink); }
+.axis .track { background:var(--bg); box-shadow:inset 0 0 0 1px var(--line); }
+.axis li + li.track { box-shadow:inset 0 0 0 1px var(--line), inset 2px 0 0 var(--card); }
+.axis-ticks { position:relative; height:2.25rem; list-style:none; margin:.25rem 0 0; padding:0; font-size:.7rem; line-height:1.25; color:var(--muted); font-variant-numeric:tabular-nums; }
+.axis-ticks li { position:absolute; top:0; width:4rem; transform:translateX(-50%); text-align:center; }
+.axis-ticks li:first-child { transform:none; text-align:left; }
+/* From four ticks up, every second label drops to a second row so close boundaries do not collide. */
+.axis-ticks:has(li:nth-child(4)) { height:4rem; }
+.axis-ticks li:first-child:nth-last-child(n+4) ~ li:nth-child(even) { top:2.1rem; }
+/* From six ticks up (axes of about two days or more) it takes three rows. */
+.axis-ticks:has(li:nth-child(6)) { height:5.8rem; }
+.axis-ticks li:first-child:nth-last-child(n+6) ~ li:nth-child(3n+1) { top:0; }
+.axis-ticks li:first-child:nth-last-child(n+6) ~ li:nth-child(3n+2) { top:2rem; }
+.axis-ticks li:first-child:nth-last-child(n+6) ~ li:nth-child(3n) { top:4rem; }
+.axis-ticks li:last-child { transform:translateX(-100%); text-align:right; }
+.billing caption { caption-side:top; text-align:left; padding:0 .5rem .5rem; color:var(--muted); font-size:.85rem; font-weight:600; }
+.billing th, .billing td { padding:.5rem; white-space:normal; vertical-align:top; }
+.billing td.num { white-space:nowrap; }
+.billing tbody th, .billing tfoot th { color:var(--ink); font-size:1rem; }
+.billing tbody th { font-weight:400; }
+.billing tfoot th { font-weight:700; border-bottom:0; }
 .legend { display:flex; flex-wrap:wrap; gap:.25rem 1.25rem; list-style:none; margin:.75rem 0 0; padding:0; font-size:.85rem; color:var(--muted); }
 .legend li { display:flex; align-items:center; gap:.4rem; }
 .swatch { display:inline-block; width:.9rem; height:.9rem; border-radius:3px; }
@@ -136,6 +158,24 @@ dd { margin:0; }
   .sessions tfoot tr { display:flex; flex-wrap:wrap; justify-content:space-between; gap:0 1rem; padding-top:.75rem; }
   .sessions tfoot th, .sessions tfoot td { display:block; padding:0; border:0; }
   .sessions tfoot th { flex-basis:100%; }
+}
+@media (max-width:39.99rem) {
+  /* Each row becomes a small card: window and cost, then times and energy, then the rate. The
+     column heads stay for screen readers; the figures name themselves. */
+  .billing, .billing thead, .billing tbody, .billing tfoot { display:block; }
+  .billing thead { position:absolute; width:1px; height:1px; margin:-1px; overflow:hidden; clip-path:inset(50%); }
+  .billing caption { display:block; }
+  .billing tbody tr { display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-areas:"label cost" "times energy" "rate ."; gap:.125rem 1rem; padding:.625rem 0; border-bottom:1px solid var(--line); }
+  .billing tbody th, .billing tbody td { padding:0; border:0; }
+  .billing .label { grid-area:label; font-weight:600; }
+  .billing td.cost { grid-area:cost; }
+  .billing td.times { grid-area:times; }
+  .billing td.energy { grid-area:energy; }
+  .billing td.rate { grid-area:rate; text-align:left; color:var(--muted); font-size:.85rem; }
+  .billing tfoot tr { display:flex; justify-content:space-between; gap:0 1rem; padding-top:.625rem; }
+  .billing tfoot th, .billing tfoot td { padding:0; border:0; }
+  .billing tfoot td:empty { display:none; }
+  .billing tfoot th { margin-right:auto; }
 }
 @media (max-width:359px) { .t06, .t18 { display:none; } }
 footer { color:var(--muted); font-size:.85rem; padding-bottom:2rem; }

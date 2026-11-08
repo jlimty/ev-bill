@@ -1,11 +1,8 @@
 package web
 
 import (
-	"reflect"
 	"testing"
 	"time"
-
-	"github.com/jlimty/ev-bill/internal/billing"
 )
 
 // BIL-5: money shows as dollars and cents from integer cents.
@@ -31,29 +28,6 @@ func TestFormatWh(t *testing.T) {
 		if got := FormatWh(c.in); got != c.want {
 			t.Errorf("FormatWh(%d) = %q, want %q", c.in, got, c.want)
 		}
-	}
-}
-
-// UI-2: bar widths are each segment's share of the total duration.
-func TestBarWidths(t *testing.T) {
-	start := time.Date(2026, 11, 6, 21, 40, 0, 0, time.UTC)
-	mid := start.Add(80 * time.Minute)
-	end := mid.Add(75 * time.Minute)
-	segs := []billing.Segment{{Start: start, End: mid}, {Start: mid, End: end}}
-
-	if got, want := BarWidths(segs), []string{"51.6", "48.4"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("BarWidths = %v, want %v", got, want)
-	}
-	if got := BarWidths(nil); len(got) != 0 {
-		t.Errorf("BarWidths(nil) = %v, want empty", got)
-	}
-	zero := []billing.Segment{{Start: start, End: start}}
-	if got := BarWidths(zero); len(got) != 0 {
-		t.Errorf("BarWidths(zero total) = %v, want empty", got)
-	}
-	whole := []billing.Segment{{Start: start, End: mid}}
-	if got, want := BarWidths(whole), []string{"100.0"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("BarWidths(single) = %v, want %v", got, want)
 	}
 }
 
@@ -124,6 +98,29 @@ func TestFormatWh_VIEW8(t *testing.T) {
 	for _, c := range cases {
 		if got := FormatWh(c.in); got != c.want {
 			t.Errorf("FormatWh(%d) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// VIEW-1: a rate reads as whole cents per kWh.
+func TestFormatRate_VIEW1(t *testing.T) {
+	if got := FormatRate(62); got != "62¢/kWh" {
+		t.Errorf("FormatRate(62) = %q", got)
+	}
+}
+
+// VIEW-4: durations read in minutes and hours; under a minute is 0 min.
+func TestFormatDuration_VIEW4(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{30 * time.Second, "0 min"}, {-time.Minute, "0 min"}, {10 * time.Minute, "10 min"}, {59*time.Minute + 59*time.Second, "59 min"},
+		{time.Hour, "1 h"}, {2*time.Hour + 5*time.Minute, "2 h 5 min"}, {3 * time.Hour, "3 h"},
+	}
+	for _, c := range cases {
+		if got := FormatDuration(c.in); got != c.want {
+			t.Errorf("FormatDuration(%v) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
