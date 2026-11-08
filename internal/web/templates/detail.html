@@ -1,0 +1,38 @@
+{{define "content"}}
+<p><a href="/">&larr; All sessions</a></p>
+<h1>Session on {{.Charger}}</h1>
+<div class="card">
+<dl>
+<dt>Charger</dt><dd>{{.Charger}}</dd>
+<dt>Status</dt><dd><span class="badge {{.Status}}">{{.Status}}</span></dd>
+<dt>Started</dt><dd>{{.Started}}</dd>
+<dt>Stopped</dt><dd>{{.Stopped}}</dd>
+</dl>
+</div>
+{{if .Bar}}
+<div class="card">
+<ol class="bar" aria-label="Tariff windows over the session">
+{{range .Bar}}<li class="seg {{.Class}}" style="width: {{.Width}}%">
+<div class="block" title="{{.Label}} {{.Times}}">{{.Label}}</div>
+<div class="times">{{.Times}}</div>
+</li>
+{{end}}</ol>
+</div>
+<div class="card">
+<table>
+<thead><tr><th>Window</th><th>Time</th><th class="num">Energy</th><th class="num">Rate</th><th class="num">Cost</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr>
+<td>{{.Label}}</td><td>{{.Times}}</td><td class="num">{{.Energy}}</td><td class="num">{{.Rate}}</td><td class="num">{{.Cost}}</td>
+</tr>
+{{end}}</tbody>
+<tfoot><tr><td colspan="2">Total</td><td class="num">{{.Energy}}</td><td></td><td class="num">{{.Total}}</td></tr></tfoot>
+</table>
+</div>
+{{else}}
+<div class="card">
+<p>No readings yet, so nothing is billed.</p>
+<p>Energy {{.Energy}} · Total <strong>{{.Total}}</strong></p>
+</div>
+{{end}}
+{{end}}
