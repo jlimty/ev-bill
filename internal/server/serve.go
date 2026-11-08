@@ -36,7 +36,9 @@ func Serve(ctx context.Context, ln net.Listener, h http.Handler, shutdownTimeout
 	case <-ctx.Done():
 	}
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	// ctx is already cancelled (that is why we are here), so keep its values
+	// but drop its cancellation or Shutdown would give up immediately.
+	shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutCtx); err != nil {
 		// Requests outlived the timeout: close their connections so their

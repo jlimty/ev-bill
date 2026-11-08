@@ -316,3 +316,65 @@ func TestNew_WiresRoutes_OPS2_OPS5(t *testing.T) {
 		t.Errorf("OPS-5: %d log lines for 3 requests: %q", n, buf.String())
 	}
 }
+
+func TestServe_OPS3_ListenerFailureReturnsPromptly(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() {
+		served <- Serve(context.Background(), ln, http.NotFoundHandler(), time.Second, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	}()
+	select {
+	case err := <-served:
+		if err == nil {
+			t.Error("OPS-3: Serve = nil on a closed listener, want an error")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("OPS-3: Serve hung instead of returning the listener error")
+	}
+}
+
+func TestRequestLogger_OPS5_FlushReachesRealWriter(t *testing.T) {
+	var buf bytes.Buffer
+	h := RequestLogger(slog.New(slog.NewJSONHandler(&buf, nil)), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Errorf("OPS-5: Flush through the logger wrapper failed: %v", err)
+		}
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stream", nil))
+	if !rec.Flushed {
+		t.Error("OPS-5: flush did not reach the underlying writer")
+	}
+}
+
+func TestRequestLogger_OPS5_FirstStatusWins(t *testing.T) {
+	var buf bytes.Buffer
+	h := RequestLogger(slog.New(slog.NewJSONHandler(&buf, nil)), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if line := logLine(t, &buf); line["status"] != float64(http.StatusCreated) {
+		t.Errorf("OPS-5: status = %v, want the first (201)", line["status"])
+	}
+}
+
+// failingWriter makes every body write fail, like a client that went away.
+type failingWriter struct{ http.ResponseWriter }
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("client gone") }
+
+func TestHealth_OPS2_ResponseWriteFailureIsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	h := Health(pingFunc(func(context.Context) error { return nil }), time.Second, slog.New(slog.NewJSONHandler(&logs, nil)))
+	h.ServeHTTP(failingWriter{httptest.NewRecorder()}, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if !strings.Contains(logs.String(), "client gone") {
+		t.Errorf("OPS-2: write failure not logged: %q", logs.String())
+	}
+}
