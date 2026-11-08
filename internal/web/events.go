@@ -43,8 +43,8 @@ func (p *Pages) RegisterEvents(mux *http.ServeMux) {
 	mux.HandleFunc("GET /events", p.events)
 }
 
-// events serves GET /events?view=list and GET /events?view=session&id=<uuid>
-// as a server-sent event stream: the current fragment straight away, then a
+// events serves GET /events?view=list, GET /events?view=locations (LOC-7) and
+// GET /events?view=session&id=<uuid> as a server-sent event stream: the current fragment straight away, then a
 // re-rendered one after hub signals, at most one per renderGap, and a
 // heartbeat when idle (LIVE-1). Renders are shared between the streams on one
 // view through p.renders. A HEAD request (which "GET /events" also matches)
@@ -63,6 +63,8 @@ func (p *Pages) events(w http.ResponseWriter, r *http.Request) {
 	switch view {
 	case "list":
 		key, render = "list", p.listFragment
+	case "locations":
+		key, render = "locations", p.locationsFragment
 	case "session":
 		id := q.Get("id")
 		if id == "" {

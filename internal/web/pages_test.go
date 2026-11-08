@@ -250,14 +250,15 @@ func TestPages_SecurityHeaders(t *testing.T) {
 	}
 }
 
-// LIVE-3: the CSP allows only same-origin scripts and connections, so the
+// LIVE-3, LOC-7: the CSP allows only same-origin scripts and connections, so the
 // pages need nothing else: inline CSS, the style attribute, and the one
 // same-origin script, /static/live.js, on live pages only.
 func TestPages_NeedNoScriptOrExternalResources(t *testing.T) {
 	e := newEnv(t)
 	done := e.mockup("CP-01")
 	active := e.start("CP-02", sgt(0, 15, 7))
-	for path, live := range map[string]bool{"/": true, "/sessions/" + active: true, "/sessions/" + done: false, "/sessions/not-a-uuid": false} {
+	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Unavailable)}, samplesBack("100001", 3, 1, 1, 1))
+	for path, live := range map[string]bool{"/": true, "/locations": true, "/sessions/" + active: true, "/sessions/" + done: false, "/sessions/not-a-uuid": false} {
 		body := strings.ToLower(e.get(path).Body.String())
 		rest := strings.Replace(body, strings.ToLower(liveScript), "", 1)
 		if live != (rest != body) {

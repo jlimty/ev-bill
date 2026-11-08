@@ -384,3 +384,59 @@ func TestStatusPages_LIVE1_DoneClosesWithoutReload(t *testing.T) {
 	}
 	must(t, "LIVE-1: still done", expect.Locator(page.Locator(`body[data-stream-state="done"]`)).ToBeAttached())
 }
+
+// TestLocations_LOC7_UpdatesWithoutReload opens the Locations page with one
+// site and waits for its stream to connect, then turns the site's free
+// connector busy through ApplyObservation and the hub, as a poll does. The
+// cell must change class without a reload (window.__marker survives), under
+// the real CSP, with no console errors or CSP violations. It runs at phone
+// width, where the page must not scroll sideways.
+func TestLocations_LOC7_UpdatesWithoutReload(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(testdb.New(t))
+	charger := func(status datamall.Status, observed time.Time) []store.ChargerRow {
+		return []store.ChargerRow{{
+			Connector: datamall.Connector{
+				// The longest watched site's name, so a long name that pushed the
+				// page wider than a phone would show.
+				ChargerID: "LOC-1", LocationName: "Blk 29/32 Telok Blangah Rise HDB car park", Address: "1 Test Road", PostalCode: "100001",
+				Operator: "Testco", Position: "B1", PlugType: "Type 2", Current: "AC", PowerW: 22_000,
+				Price: "0.6976", PriceType: "kWh", Status: status,
+			},
+			ObservedAt: observed,
+		}}
+	}
+	must(t, "seed site", st.ApplyObservation(ctx, charger(datamall.Available, sgt(7, 0, 10)),
+		[]store.OccupancySample{{PostalCode: "100001", ObservedAt: sgt(7, 0, 10), Occupied: 0, Available: 1}}))
+	srv, hub := startServer(t, st)
+	page, expect := openBrowser(t)
+	must(t, "phone viewport", page.SetViewportSize(375, 812))
+
+	_, err := page.Goto(srv.URL + "/locations")
+	must(t, "open locations", err)
+	// The page fits a phone: nothing, the hidden hourly table included, makes it scroll sideways.
+	width, err := page.Evaluate("() => document.documentElement.scrollWidth")
+	must(t, "read scroll width", err)
+	if w, ok := width.(int); !ok || w > 375 {
+		t.Errorf("LOC-7: page is %v px wide at a 375 px viewport, want no horizontal scroll", width)
+	}
+	cell := page.Locator(`[data-live="locations"] .cells .cell`)
+	must(t, "LOC-5: one cell", expect.Locator(cell).ToHaveCount(1))
+	must(t, "LOC-5: free", expect.Locator(cell).ToHaveClass("cell free"))
+	must(t, "LOC-7: stream connected", expect.Locator(page.Locator(`body[data-stream-state="connected"]`)).ToBeAttached())
+	_, err = page.Evaluate("() => { window.__marker = 1 }")
+	must(t, "set marker", err)
+
+	must(t, "observe busy", st.ApplyObservation(ctx, charger(datamall.Occupied, sgt(7, 0, 15)),
+		[]store.OccupancySample{{PostalCode: "100001", ObservedAt: sgt(7, 0, 15), Occupied: 1, Available: 0}}))
+	hub.Publish()
+
+	must(t, "LOC-7: cell turns busy", expect.Locator(cell).ToHaveClass("cell busy", playwright.LocatorAssertionsToHaveClassOptions{Timeout: playwright.Float(5000)}))
+	must(t, "LOC-5: count", expect.Locator(page.Locator(`[data-live="locations"] .count`)).ToHaveText("as of 00:15 · 1 busy · 0 free"))
+
+	marker, err := page.Evaluate("() => window.__marker")
+	must(t, "read marker", err)
+	if n, ok := marker.(int); !ok || n != 1 {
+		t.Errorf("LOC-7: window.__marker = %v (%T), want 1: the page reloaded", marker, marker)
+	}
+}

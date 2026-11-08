@@ -34,10 +34,12 @@ type HourAggregate struct {
 
 // scopeSQL selects the chargers of the newest observation: LOC-5's current
 // scope. Rows come sorted by site, then charger_id, which gives the site
-// order, the charger order and each site's name (its first row).
+// order, the charger order and each site's name (its first row). COLLATE "C"
+// sorts charger IDs by byte, as Go does, whatever the database's locale: under
+// en_US.UTF-8 "AB1" would otherwise sort before "AB-2".
 const scopeSQL = `SELECT ` + chargerColumns + ` FROM chargers
 WHERE observed_at = (SELECT max(observed_at) FROM chargers)
-ORDER BY postal_code, charger_id`
+ORDER BY postal_code, charger_id COLLATE "C"`
 
 // samplesSQL sums the samples in the window per site and hour of day (LOC-2,
 // LOC-3). AT TIME ZONE turns the stored instant into Singapore wall-clock
@@ -50,10 +52,11 @@ FROM occupancy_samples
 WHERE observed_at >= $1 AND postal_code = ANY($2::text[])
 GROUP BY postal_code, hour`
 
-// sessionsSQL lists the mirror sessions started in the window at the scope's
-// chargers ($2), each with its energy (LOC-6): the stop meter, else the
-// highest reading, else the start meter, minus the start meter.
-const sessionsSQL = `SELECT s.charger_id,
+// sessionsSQL lists the mirror sessions started since $1 at the scope's
+// chargers ($2), each with its start and its energy (LOC-6): the stop meter,
+// else the highest reading, else the start meter, minus the start meter.
+// addLocationSessions narrows each site to its own window.
+const sessionsSQL = `SELECT s.charger_id, s.started_at,
 	coalesce(s.meter_stop_wh,
 		(SELECT max(r.meter_wh) FROM meter_readings r WHERE r.session_id = s.id),
 		s.meter_start_wh) - s.meter_start_wh
@@ -61,7 +64,8 @@ FROM sessions s
 WHERE s.source = 'mirror' AND s.started_at >= $1 AND s.charger_id = ANY($2::text[])`
 
 // Locations returns one aggregate per site in the current scope, sorted by
-// postal code, over samples and sessions from since onwards. With no charger
+// postal code, over samples from since onwards and sessions from the later of
+// since and the site's first sample (LOC-2, LOC-6). With no charger
 // stored it returns an empty, non-nil slice. The second and third queries take
 // their postal codes and charger IDs from the first, so every figure belongs
 // to the same scope even if a poll lands in between.
@@ -156,10 +160,13 @@ func (s *Store) addLocationSamples(ctx context.Context, since time.Time, out []L
 	return nil
 }
 
-// addLocationSessions adds each mirror session in the window to its charger's
+// addLocationSessions adds each mirror session in its site's window to that
 // site: one billing session, its energy, and its value at the charger's
 // current posted price, or one more price-n/a session when that price is
-// unknown (LOC-6).
+// unknown (LOC-6). A site's window is the same as its utilization's (LOC-2):
+// from since, or from its first sample when that is later. A site with no
+// sample has no window, so no session counts. It runs after
+// addLocationSamples, which sets FirstSample.
 func (s *Store) addLocationSessions(ctx context.Context, since time.Time, out []LocationAggregate, siteOf map[string]int) error {
 	price := make(map[string]int64, len(siteOf))
 	priceOK := make(map[string]bool, len(siteOf))
@@ -176,14 +183,18 @@ func (s *Store) addLocationSessions(ctx context.Context, since time.Time, out []
 	}
 	var (
 		chargerID string
+		startedAt time.Time
 		wh        int64
 	)
-	_, err = pgx.ForEachRow(rows, []any{&chargerID, &wh}, func() error {
+	_, err = pgx.ForEachRow(rows, []any{&chargerID, &startedAt, &wh}, func() error {
 		i, ok := siteOf[chargerID]
 		if !ok {
 			return fmt.Errorf("unexpected charger %q", chargerID)
 		}
 		site := &out[i]
+		if site.FirstSample.IsZero() || startedAt.Before(windowStart(since, site.FirstSample)) {
+			return nil
+		}
 		site.Sessions++
 		site.EnergyWh += wh
 		if priceOK[chargerID] {
@@ -197,4 +208,13 @@ func (s *Store) addLocationSessions(ctx context.Context, since time.Time, out []
 		return fmt.Errorf("location sessions: %w", err)
 	}
 	return nil
+}
+
+// windowStart is a site's window start (LOC-2): since, or its first sample
+// when that is later.
+func windowStart(since, firstSample time.Time) time.Time {
+	if firstSample.After(since) {
+		return firstSample
+	}
+	return since
 }

@@ -151,7 +151,7 @@ The contract is [`api/openapi.yaml`](api/openapi.yaml); handler tests validate r
 | GET | `/api/sessions` | none | 200 (newest 50) |
 | GET | `/healthz` | none | 200, or 503 if the database ping fails within 2 s |
 
-Status pages: `/` (newest 50) and `/sessions/{id}` (segment bar and table). They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 3 s.
+Status pages: `/` (newest 50), `/sessions/{id}` (segment bar and table) and `/locations` (see [Locations](#locations)). They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 3 s.
 
 ## Live mirror
 
@@ -188,6 +188,26 @@ LTA_ACCOUNT_KEY=<your key> make run
 
 The first poll runs at startup; the feed line on http://localhost:8080/ shows the time of the last update. Without `LTA_ACCOUNT_KEY`, `make run` works as before and the feed line says "Live mirror off". The AccountKey is never logged, returned or rendered. Completed mirror sessions are deleted after 14 days; `api` sessions are never deleted automatically.
 
+## Locations
+
+`/locations` shows whether public charging at the watched sites is under-used. It has one card per site in the newest feed observation, and updates live over `/events?view=locations`. Rules LOC-1..7 are in the [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md).
+
+Observed figures come straight from LTA's occupancy data:
+
+- **Utilization** is busy ÷ (busy + free), summed over the occupancy samples the mirror writes on every applied poll. Out-of-service connectors are not capacity, so they are left out. Time the mirror was not watching (sleep, deploy, feed outage) has no samples, so it never counts as idle. A site whose connectors were all out of service shows `n/a`.
+- **The 24-hour strip** is the same ratio by hour of day in Singapore time. Each bar is coloured by the tariff window of its hour. A dotted outline marks an hour with no samples, which is not the same as 0%.
+- **The connector grid** shows each connector's latest state: busy (solid), free (outline) or out of service (hatched), with a text count beside it. When the mirror is off, the feed is delayed, or no update has arrived since startup, the grid is greyed and the count reads "as of HH:MM", with the date when that is not today.
+- **The headline** pools busy and free time across the sites that have enough data, so larger sites weigh more. It is not an average of the sites' percentages.
+
+**Billing sessions** count the mirror sessions started in the window at a site's chargers. The count is not an estimate. A gap or the 48 h limit can split one car's stay into more than one, hence "billing sessions".
+
+Estimated figures are labelled "est.":
+
+- **Est. energy** is those sessions' estimated energy (rated power, see [Live mirror](#live-mirror)).
+- **Est. value** is each session's energy at its charger's posted price today, applied to the whole window. A charger whose price type is not per kWh or free has no usable price, so its sessions are left out and counted as "price n/a".
+
+The window is the last 14 days, or since the first sample when that is later ("Since 8 Nov · 31 h observed"). Each site's utilization, sessions, energy and value share its window, so a site with no samples yet shows 0 billing sessions. A site needs 288 samples (24 h observed) before it is ranked or counted in the headline. Until then it shows "collecting data · N h" and follows the ranked sites, which are ordered least used first.
+
 ## Quality gates
 
 `make check` runs the local gates and CI runs the same checks. See [`docs/playbook.md`](docs/playbook.md) for detail.
@@ -222,6 +242,7 @@ Free-tier limits (Render's free-tier terms as of November 2026):
 
 - [Spec](docs/superpowers/specs/2026-11-07-ev-billing-design.md): rule IDs (BIL, SES, API, UI, OPS)
 - [Plan](docs/superpowers/plans/2026-11-07-ev-billing.md)
+- [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md): rule IDs LOC-1..7 (occupancy samples, utilization, hourly profile, data sufficiency, live connector state, sessions and estimated value, the page)
 - [Live mirror spec](docs/superpowers/specs/2026-11-08-live-mirror-design.md): rule IDs MIR-1..12 (poller, scope, observation time, energy estimate, gaps, reconciliation, coexistence with API sessions, charger details, retention, config, lifecycle, occupancies past 48 h) and LIVE-1..4 (event stream, hub, pushed content, page content)
 - [Live mirror plan](docs/superpowers/plans/2026-11-08-live-mirror.md)
 - [AGENTS.md](AGENTS.md): constraints and rules for coding agents
