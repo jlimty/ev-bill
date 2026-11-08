@@ -78,10 +78,14 @@ const (
 // far from that limit.
 const MaxMeterWh int64 = 1_000_000_000_000_000
 
-// EarliestStart is the earliest started_at accepted (2000-01-01T00:00:00Z).
+// earliestStart is the earliest started_at accepted (2000-01-01T00:00:00Z).
+var earliestStart = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// EarliestStart returns the earliest started_at accepted (2000-01-01T00:00:00Z).
 // Replays of older data are not supported: JSON encoding and the tariff are
-// only meaningful for modern dates.
-var EarliestStart = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+// only meaningful for modern dates. It is a function so callers cannot change
+// the limit.
+func EarliestStart() time.Time { return earliestStart }
 
 var chargerIDPattern = regexp.MustCompile(`^[A-Z0-9-]{1,32}$`)
 
@@ -91,7 +95,7 @@ func isStopped(s Session) bool { return s.StoppedAt != nil && s.MeterStopWh != n
 func meterInRange(wh int64) bool { return wh >= 0 && wh <= MaxMeterWh }
 
 // CheckStart validates a new session (SES-1). Historic start times are
-// allowed so that replays of old sessions work, back to EarliestStart.
+// allowed so that replays of old sessions work, back to EarliestStart().
 func CheckStart(chargerID string, startedAt time.Time, meterStartWh int64, now time.Time) error {
 	if !chargerIDPattern.MatchString(chargerID) {
 		return invalid("invalid_charger_id", "charger_id must be 1 to 32 characters of A-Z, 0-9 or -")
@@ -99,7 +103,7 @@ func CheckStart(chargerID string, startedAt time.Time, meterStartWh int64, now t
 	if !meterInRange(meterStartWh) {
 		return invalid("invalid_reading", "meter_start_wh is out of range")
 	}
-	if startedAt.Before(EarliestStart) {
+	if startedAt.Before(earliestStart) {
 		return invalid("invalid_reading", "started_at is before 2000-01-01")
 	}
 	if startedAt.After(now.Add(MaxClockSkew)) {

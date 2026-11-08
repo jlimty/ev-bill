@@ -60,7 +60,6 @@ mutation:
 
 check: fmt-check lint test test-tz vuln secrets
 
-# Runs the server against the local evbilling database. cmd/server arrives in
-# Task 10, so this fails until then.
+# Runs the server against the local evbilling database on port 8080 with API_KEY=dev.
 run:
 	PORT=8080 DATABASE_URL='postgres://localhost:5432/evbilling?sslmode=disable' API_KEY=dev go run ./cmd/server

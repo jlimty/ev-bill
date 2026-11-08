@@ -181,6 +181,9 @@ components:
         started_at:
           type: string
           format: date-time
+          description: >-
+            Must be on or after 2000-01-01T00:00:00Z and no more than 5 minutes
+            ahead of the server clock; otherwise 422 invalid_reading.
         meter_start_wh:
           $ref: '#/components/schemas/MeterWh'
     MeterValueRequest:
