@@ -2,14 +2,17 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/live"
 	"github.com/jlimty/ev-bill/internal/reqid"
 	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
@@ -18,27 +21,38 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
-// pageTemplates holds one template set per page, each parsed with the layout.
+// pageTemplates holds one template set per page, each parsed with the layout
+// and the fragments the page includes. The event stream executes the same
+// fragments from these sets, so the page and the stream cannot disagree.
 // The files are embedded, so a parse failure is a programming error.
 var pageTemplates = map[string]*template.Template{
-	"list":   parsePage("list"),
-	"detail": parsePage("detail"),
+	"list":   parsePage("list", "list_body"),
+	"detail": parsePage("detail", "detail_live"),
 	"error":  parsePage("error"),
 }
 
-func parsePage(name string) *template.Template {
-	return template.Must(template.ParseFS(templateFS, "templates/layout.html", "templates/"+name+".html"))
+func parsePage(name string, fragments ...string) *template.Template {
+	files := []string{"templates/layout.html", "templates/" + name + ".html"}
+	for _, f := range fragments {
+		files = append(files, "templates/"+f+".html")
+	}
+	return template.Must(template.ParseFS(templateFS, files...))
 }
 
-// Pages serves the status pages. Logger must be non-nil.
+// Pages serves the status pages and their event stream. Logger must be
+// non-nil. Hub may be nil, which turns GET /events into a 503. Feed is the
+// mirror's health; it is not rendered yet.
 type Pages struct {
 	Store  *store.Store
 	Tariff billing.Tariff
 	Now    func() time.Time
 	Logger *slog.Logger
+	Hub    *live.Hub
+	Feed   *live.Feed
 }
 
-// Register mounts the pages on mux.
+// Register mounts the pages on mux. The event stream is mounted separately,
+// by RegisterEvents, so it can sit outside the per-request deadline.
 func (p *Pages) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", p.list)
 	mux.HandleFunc("GET /sessions/{id}", p.detail)
@@ -85,18 +99,26 @@ func (p *Pages) layout(title string, refresh bool) layoutData {
 }
 
 func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
-	items, err := p.Store.ListRecent(r.Context(), sessions.ListLimit)
+	data, err := p.listData(r.Context())
 	if err != nil {
-		p.serverError(w, r, "list sessions", err)
+		p.serverError(w, r, "list page", err)
 		return
+	}
+	p.render(w, r, http.StatusOK, "list", data)
+}
+
+// listData builds the list page's data, which the list_body fragment also uses.
+func (p *Pages) listData(ctx context.Context) (listPage, error) {
+	items, err := p.Store.ListRecent(ctx, sessions.ListLimit)
+	if err != nil {
+		return listPage{}, fmt.Errorf("list sessions: %w", err)
 	}
 	now := p.Now()
 	data := listPage{layoutData: p.layout("Charging sessions", true), Rows: []listRow{}}
 	for _, it := range items {
 		v, err := sessions.BuildView(it.Session, it.Readings, p.Tariff, now)
 		if err != nil {
-			p.serverError(w, r, "build view", err)
-			return
+			return listPage{}, fmt.Errorf("build view: %w", err)
 		}
 		data.Rows = append(data.Rows, listRow{
 			ID:      v.Session.ID,
@@ -107,11 +129,11 @@ func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
 			Cost:    FormatCents(v.Bill.TotalCents),
 		})
 	}
-	p.render(w, r, http.StatusOK, "list", data)
+	return data, nil
 }
 
 func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
-	sess, readings, err := p.Store.GetSession(r.Context(), r.PathValue("id"))
+	data, err := p.detailData(r.Context(), r.PathValue("id"))
 	if errors.Is(err, sessions.ErrNotFound) {
 		p.render(w, r, http.StatusNotFound, "error", errorPage{
 			layoutData: p.layout("Not found", false),
@@ -121,13 +143,22 @@ func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		p.serverError(w, r, "get session", err)
+		p.serverError(w, r, "detail page", err)
 		return
+	}
+	p.render(w, r, http.StatusOK, "detail", data)
+}
+
+// detailData builds the detail page's data, which the detail_live fragment
+// also uses. An unknown or malformed id is sessions.ErrNotFound.
+func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
+	sess, readings, err := p.Store.GetSession(ctx, id)
+	if err != nil {
+		return detailPage{}, fmt.Errorf("get session: %w", err)
 	}
 	v, err := sessions.BuildView(sess, readings, p.Tariff, p.Now())
 	if err != nil {
-		p.serverError(w, r, "build view", err)
-		return
+		return detailPage{}, fmt.Errorf("build view: %w", err)
 	}
 
 	data := detailPage{
@@ -158,7 +189,7 @@ func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 			data.Bar = append(data.Bar, barSeg{Class: class, Label: label, Times: times, Width: widths[i]})
 		}
 	}
-	p.render(w, r, http.StatusOK, "detail", data)
+	return data, nil
 }
 
 // clock formats t in the tariff's location: "HH:MM", or "DD Mon YYYY HH:MM" with a date.

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +21,11 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/getkin/kin-openapi/routers/legacy"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/live"
+	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
 	"github.com/jlimty/ev-bill/internal/testdb"
 )
@@ -290,7 +296,7 @@ func TestNew_WiresRoutes_OPS2_OPS5(t *testing.T) {
 	var buf bytes.Buffer
 	l := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	now := func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) }
-	h := New(store.New(pool), billing.SingaporeTariff(), "k", now, l)
+	h := New(Deps{Store: store.New(pool), Tariff: billing.SingaporeTariff(), APIKey: "k", Now: now, Logger: l})
 
 	for _, tc := range []struct {
 		path     string
@@ -403,7 +409,7 @@ func TestErrorLogs_OPS5_CarryRequestID(t *testing.T) {
 	var buf bytes.Buffer
 	l := slog.New(slog.NewJSONHandler(&buf, nil))
 	now := func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) }
-	h := New(store.New(pool), billing.SingaporeTariff(), "k", now, l)
+	h := New(Deps{Store: store.New(pool), Tariff: billing.SingaporeTariff(), APIKey: "k", Now: now, Logger: l})
 	pool.Close() // every store call now fails with a 500
 
 	for _, path := range []string{"/api/sessions", "/", "/healthz"} {
@@ -490,29 +496,190 @@ func TestRequestTimeout_OPS2(t *testing.T) {
 	}
 }
 
-// OPS-2: the handler New builds applies the deadline: a request context carries
-// it, the handler returns once it passes, and the logged status is the real one.
-func TestNewHandler_OPS2_AppliesDeadline(t *testing.T) {
-	var got error
-	var buf bytes.Buffer
-	h := newHandler(slog.New(slog.NewJSONHandler(&buf, nil)), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-			got = r.Context().Err()
-			w.WriteHeader(http.StatusInternalServerError)
-		case <-time.After(2 * time.Second):
+// testDeps returns Deps on a fresh test database, with a hub that runs until
+// the test ends, and the pool behind the store.
+func testDeps(t *testing.T, logs io.Writer) (Deps, *pgxpool.Pool) {
+	t.Helper()
+	pool := testdb.New(t)
+	hub := live.NewHub(100)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- hub.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("hub.Run = %v", err)
 		}
-	}), 50*time.Millisecond)
+	})
+	now := func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) }
+	return Deps{
+		Store:  store.New(pool),
+		Tariff: billing.SingaporeTariff(),
+		APIKey: "k",
+		Now:    now,
+		Logger: slog.New(slog.NewJSONHandler(logs, nil)),
+		Hub:    hub,
+		Feed:   &live.Feed{},
+	}, pool
+}
+
+// openEvents opens GET /events?view=list on url, reads the first event's
+// "event:" line, and returns a reader for the rest of the stream. The body is
+// closed when the test ends.
+func openEvents(t *testing.T, url string) (*http.Response, *bufio.Reader) {
+	t.Helper()
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(url + "/events?view=list")
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close stream: %v", err)
+		}
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /events = %d, want 200", resp.StatusCode)
+	}
+	r := bufio.NewReader(resp.Body)
+	if line := readLine(t, r); line != "event: list" {
+		t.Fatalf("first line = %q, want event: list", line)
+	}
+	return resp, r
+}
+
+func readLine(t *testing.T, r *bufio.Reader) string {
+	t.Helper()
+	line, err := r.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	return strings.TrimSuffix(line, "\n")
+}
+
+// nextEventData reads to the next "event:" line and returns that event's data.
+func nextEventData(t *testing.T, r *bufio.Reader) string {
+	t.Helper()
+	for readLine(t, r) != "event: list" {
+	}
+	var data []string
+	for line := readLine(t, r); line != ""; line = readLine(t, r) {
+		data = append(data, strings.TrimPrefix(line, "data: "))
+	}
+	return strings.Join(data, "\n")
+}
+
+// LIVE-1, OPS-2: GET /events sits outside the per-request deadline, so it
+// stays open long past it, while the API and the pages still get it. A table
+// lock makes their queries wait, so only the deadline can end them. The stream
+// still goes through RequestLogger.
+func TestEvents_LIVE1_NotCutByDeadlines(t *testing.T) {
+	var logs bytes.Buffer
+	d, pool := testDeps(t, &syncWriter{w: &logs})
+	srv := httptest.NewServer(build(d, 50*time.Millisecond))
+	t.Cleanup(srv.Close)
+
+	resp, stream := openEvents(t, srv.URL)
+	if resp.Header.Get("X-Request-ID") == "" {
+		t.Error("OPS-5: the stream is not wrapped by RequestLogger")
+	}
+
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := tx.Exec(ctx, "LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatalf("lock sessions: %v", err)
+	}
+	for _, path := range []string{"/api/sessions", "/"} {
+		start := time.Now()
+		r, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		if err := r.Body.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+		if r.StatusCode != http.StatusInternalServerError {
+			t.Errorf("OPS-2: GET %s behind a lock = %d, want 500 from the deadline", path, r.StatusCode)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Errorf("OPS-2: GET %s took %s, want about 50ms", path, took)
+		}
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond) // the stream is now well past 50ms
+	if _, err := d.Store.CreateSession(ctx, sessions.SourceAPI, "CP-LATE", d.Now(), 0, d.Now()); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	d.Hub.Publish()
+	if data := nextEventData(t, stream); !strings.Contains(data, "CP-LATE") {
+		t.Errorf("LIVE-1: event after the deadline lacks the new session: %s", data)
+	}
+}
+
+// syncWriter makes a writer safe for the server's concurrent log writes.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+// MIR-11, LIVE-1, OPS-3: with a stream open, stopping the hub ends it, so
+// Serve's graceful shutdown finishes well inside its timeout instead of
+// failing on the stream (Shutdown does not cancel request contexts).
+func TestServe_MIR11_ShutdownEndsStreams(t *testing.T) {
+	d, _ := testDeps(t, io.Discard)
+	hub := live.NewHub(100)
+	d.Hub = hub
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ran := make(chan error, 1)
+	go func() { ran <- hub.Run(ctx) }()
+	served := make(chan error, 1)
+	go func() { served <- Serve(ctx, ln, New(d), 5*time.Second, d.Logger) }()
+
+	openEvents(t, "http://"+ln.Addr().String())
 	start := time.Now()
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/slow", nil))
-	if !errors.Is(got, context.DeadlineExceeded) {
-		t.Errorf("ctx err = %v, want context.DeadlineExceeded", got)
+	cancel()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Errorf("MIR-11: Serve = %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("MIR-11: Serve did not return with a stream open")
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("returned after %s, want about 50ms", d)
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("MIR-11: shutdown took %s, want well under the 5 s timeout", took)
 	}
-	if rec.Code != http.StatusInternalServerError || !strings.Contains(buf.String(), `"status":500`) {
-		t.Errorf("status = %d, log = %s, want 500 logged", rec.Code, buf.String())
+	if err := <-ran; err != nil {
+		t.Errorf("hub.Run = %v", err)
+	}
+}
+
+// LIVE-1: without a hub, GET /events is a 503 and the other routes still work.
+func TestNew_LIVE1_NoHub(t *testing.T) {
+	d, _ := testDeps(t, io.Discard)
+	d.Hub = nil
+	h := New(d)
+	for path, want := range map[string]int{"/events?view=list": http.StatusServiceUnavailable, "/": http.StatusOK} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
 	}
 }

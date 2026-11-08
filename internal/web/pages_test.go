@@ -27,6 +27,7 @@ type env struct {
 	t    *testing.T
 	st   *store.Store
 	pool *pgxpool.Pool
+	p    *Pages
 	mux  *http.ServeMux
 	logs *bytes.Buffer
 }
@@ -39,7 +40,7 @@ func newEnv(t *testing.T) *env {
 	p := &Pages{Store: st, Tariff: billing.SingaporeTariff(), Now: fixedNow, Logger: slog.New(slog.NewTextHandler(logs, nil))}
 	mux := http.NewServeMux()
 	p.Register(mux)
-	return &env{t: t, st: st, pool: pool, mux: mux, logs: logs}
+	return &env{t: t, st: st, pool: pool, p: p, mux: mux, logs: logs}
 }
 
 func (e *env) get(path string) *httptest.ResponseRecorder {

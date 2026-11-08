@@ -71,7 +71,13 @@ func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 	_, _, _, err = st.AddReading(ctx, sessions.SourceAPI, active.ID, billing.Reading{At: sgt(7, 0, 10), MeterWh: 1000}, fixedNow())
 	must(t, "add CP-02 reading", err)
 
-	srv := httptest.NewServer(server.New(st, tariff, "test-key", fixedNow, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	srv := httptest.NewServer(server.New(server.Deps{
+		Store:  st,
+		Tariff: tariff,
+		APIKey: "test-key",
+		Now:    fixedNow,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}))
 	t.Cleanup(srv.Close)
 
 	// A launch failure fails the test. It must never skip, or the test would pass vacuously.
