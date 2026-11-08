@@ -295,9 +295,43 @@ func localBoundaryAtOrAfter(tr Tariff, tm time.Time) time.Time {
 	return tm // unreachable: tomorrow's 07:00 is always at or after tm
 }
 
-// Invariants from BIL-3, BIL-4 and BIL-6 over random monotonic readings.
+// genReadings builds random monotonic readings for the fuzz tests.
 // snapMask bit i snaps reading i onto a local 07:00/23:00 instant; shortMask
-// bit i makes the interval before reading i between 1 ns and 1 ms.
+// bit i makes the interval before reading i between 1 ns and 1 ms. Every meter
+// value is >= 0 and the last is <= 10^15 Wh.
+func genReadings(tr Tariff, seed int64, count uint8, snapMask, shortMask uint16) []Reading {
+	rng := rand.New(rand.NewSource(seed)) //nolint:gosec // deterministic test data, not security
+	n := int(count%10) + 2
+
+	// Keep timestamps in 2000-2100: Singapore changed its UTC offset in 1982
+	// and time.Sub saturates for spans beyond about 292 years.
+	minUnix := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+	spanSec := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).Unix() - minUnix
+	now := time.Unix(minUnix+rng.Int63n(spanSec), rng.Int63n(1_000_000_000))
+
+	// The meter starts anywhere in the lower half of the budget, so the
+	// final value stays <= 10^15 Wh and every value is >= 0.
+	const maxTotalWh = 1_000_000_000_000_000
+	meter := rng.Int63n(maxTotalWh / 2)
+	readings := make([]Reading, 0, n)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			step := time.Duration(1 + rng.Int63n(int64(3*24*time.Hour)))
+			if shortMask&(1<<i) != 0 {
+				step = time.Duration(1 + rng.Int63n(int64(time.Millisecond)))
+			}
+			now = now.Add(step)
+			if snapMask&(1<<i) != 0 {
+				now = localBoundaryAtOrAfter(tr, now)
+			}
+			meter += rng.Int63n(maxTotalWh / 2 / int64(n))
+		}
+		readings = append(readings, reading(now, meter))
+	}
+	return readings
+}
+
+// Invariants from BIL-3, BIL-4 and BIL-6 over random monotonic readings.
 func FuzzSplit(f *testing.F) {
 	f.Add(int64(1), uint8(2), uint16(0), uint16(0))
 	f.Add(int64(42), uint8(5), uint16(0), uint16(0))
@@ -306,34 +340,7 @@ func FuzzSplit(f *testing.F) {
 	f.Add(int64(99), uint8(8), uint16(0xAAAA), uint16(0x5555)) // mixed
 	f.Fuzz(func(t *testing.T, seed int64, count uint8, snapMask, shortMask uint16) {
 		tr := SingaporeTariff()
-		rng := rand.New(rand.NewSource(seed)) //nolint:gosec // deterministic test data, not security
-		n := int(count%10) + 2
-
-		// Keep timestamps in 2000-2100: Singapore changed its UTC offset in 1982
-		// and time.Sub saturates for spans beyond about 292 years.
-		minUnix := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
-		spanSec := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).Unix() - minUnix
-		now := time.Unix(minUnix+rng.Int63n(spanSec), rng.Int63n(1_000_000_000))
-
-		// The meter starts anywhere in the lower half of the budget, so the
-		// final value stays <= 10^15 Wh and every value is >= 0.
-		const maxTotalWh = 1_000_000_000_000_000
-		meter := rng.Int63n(maxTotalWh / 2)
-		readings := make([]Reading, 0, n)
-		for i := 0; i < n; i++ {
-			if i > 0 {
-				step := time.Duration(1 + rng.Int63n(int64(3*24*time.Hour)))
-				if shortMask&(1<<i) != 0 {
-					step = time.Duration(1 + rng.Int63n(int64(time.Millisecond)))
-				}
-				now = now.Add(step)
-				if snapMask&(1<<i) != 0 {
-					now = localBoundaryAtOrAfter(tr, now)
-				}
-				meter += rng.Int63n(maxTotalWh / 2 / int64(n))
-			}
-			readings = append(readings, reading(now, meter))
-		}
+		readings := genReadings(tr, seed, count, snapMask, shortMask)
 
 		segs, err := Split(tr, readings)
 		if err != nil {
