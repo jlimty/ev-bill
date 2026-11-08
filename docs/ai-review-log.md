@@ -37,22 +37,24 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 31 | 2026-11-08 | Mirror Tasks 5–6 / LIVE-1, LIVE-2 | Every open stream re-rendered the page on every signal, with no sharing or throttle; at the 100-stream cap one 30 s tick cost about 1.3 CPU-s locally, enough to starve a 0.1 CPU free instance and its 10-connection pool | review (whole-branch) | One shared render per view per hub generation, a 2 s minimum gap per stream, and at most 2 renders at once | Tests: 100 streams give 1 render; a 50-signal burst gives at most 2 renders per stream |
 | 32 | 2026-11-08 | Mirror Task 2 / MIR-1 | The parser fully decoded all ~2,800 feed locations before filtering, so one wrong-typed field at any unwatched location would have failed every poll | review (whole-branch) | Only watched locations are fully decoded; a malformed watched location skips its connectors | Test: a numeric field at an unwatched location no longer fails the poll |
 | 33 | 2026-11-08 | Locations Task 3 / LOC-3 | The local test database's Postgres TimeZone defaults to Asia/Singapore, which hid a missing `AT TIME ZONE` in the hour bucketing | implementer's own mutation testing | The LOC-3 test sets the session TimeZone to UTC and America/New_York itself | Test |
+| 34 | 2026-11-08 | CI / `secrets`, `sbom` | The first version of the release-tarball cache only rejected a cached tarball that failed its sha256 check, so one corrupt entry would have failed the blocking `secrets` job on every run until someone deleted it by hand | review | A check step verifies a cached tarball, and a failure falls back to the download; the install step checks again | None: shown once in CI by corrupting the restored tarball on purpose; workflow steps have no test harness |
+| 35 | 2026-11-08 | CI / process | While removing two temporary CI test commits, reverting the second one also undid its revert of the first, and the test keys and 404 URLs were pushed back to the PR branch. The command printed the leftover diff but did not stop on it | implementer's own report | Restored `ci.yml` from the real commit and cancelled the run | None: the check is now `git diff --quiet` against the real commit, which fails on any difference |
 
 ## Tally
 
-Rows counted by the "Caught by" column (33 rows):
+Rows counted by the "Caught by" column (35 rows):
 
 | Caught by | Rows | Count |
 |---|---|---|
-| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 26, 27, 28, 31, 32 | 21 |
+| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 26, 27, 28, 31, 32, 34 | 22 |
 | review (manual mutation) | 7, 12, 13, 16, 23 | 5 |
 | sonar | 4, 8, 19, 20 | 4 |
 | scan (pre-flight scan of the plan) | 29 | 1 |
-| implementer's own report | 30 | 1 |
+| implementer's own report | 30, 35 | 2 |
 | implementer's own mutation testing | 33 | 1 |
 | test, lint, mutation | none | 0 |
 
-Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32, 33), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30). Rows 3, 14, 17, 29 and 30 are "none" decisions; 14, 17, 29 and 30 give a reason or note, 3 does not.
+Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32, 33), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30, 34, 35). Rows 3, 14, 17, 29, 30, 34 and 35 are "none" decisions; 14, 17, 29, 30, 34 and 35 give a reason or note, 3 does not.
 
 ## Mutation baseline
 
