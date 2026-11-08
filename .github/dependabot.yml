@@ -1,13 +1,21 @@
 version: 2
 updates:
+  # Minor and patch updates arrive as one PR a week per ecosystem. A major
+  # update still gets a PR of its own, because it is the kind that breaks.
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
   # The CI scanners, each pinned in its own module (see the Makefile's
   # secrets target and the sbom job in ci.yml). Only the tool itself is
   # updated, so there is one PR per release and none for its dependencies.
