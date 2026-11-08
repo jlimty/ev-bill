@@ -42,11 +42,15 @@ func main() {
 // maxStreams caps open GET /events streams (LIVE-1).
 const maxStreams = 100
 
+// pageRefreshEvery is how often open pages re-render with no write, so
+// relative times and the charging-to-stale status (SES-4) stay current.
+const pageRefreshEvery = 30 * time.Second
+
 // run loads config, connects and migrates the database, then serves until ctx
-// is cancelled (OPS-1, OPS-3, OPS-4). The HTTP server, the live hub, and the
-// mirror's poller and retention job when LTA_ACCOUNT_KEY is set, share one
-// errgroup context: cancelling ctx, or any of them failing, stops them all
-// (MIR-11). Stopping the hub ends every open stream, so the server's graceful
+// is cancelled (OPS-1, OPS-3, OPS-4). The HTTP server, the live hub, its 30 s
+// page refresh, and the mirror's poller and retention job when LTA_ACCOUNT_KEY
+// is set, share one errgroup context: cancelling ctx, or any of them failing,
+// stops them all (MIR-11). Stopping the hub ends every open stream, so the server's graceful
 // shutdown can finish.
 func run(ctx context.Context, getenv func(string) string, stdout io.Writer) error {
 	cfg, err := config.Load(getenv)
@@ -94,6 +98,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return hub.Run(gctx) })
+	g.Go(func() error { return live.RunTicker(gctx, pageRefreshEvery, hub.Publish) })
 	g.Go(func() error { return server.Serve(gctx, ln, h, 10*time.Second, logger) })
 	if cfg.LTAAccountKey != "" {
 		poller := newPoller(cfg, st, feed, hub.Publish, logger)

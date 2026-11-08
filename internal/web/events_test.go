@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jlimty/ev-bill/internal/live"
+	"github.com/jlimty/ev-bill/internal/sessions"
 )
 
 // streamEnv is an env whose Pages has a running hub and whose mux, served by
@@ -322,6 +323,7 @@ type fakeStream struct {
 	flushErr      error
 	deadlineErr   error
 	writeDeadline time.Time
+	deadlines     []time.Time // every deadline set, in order
 }
 
 func newFakeStream() *fakeStream { return &fakeStream{header: http.Header{}} }
@@ -353,6 +355,7 @@ func (f *fakeStream) SetWriteDeadline(t time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writeDeadline = t
+	f.deadlines = append(f.deadlines, t)
 	return f.deadlineErr
 }
 
@@ -360,6 +363,32 @@ func (f *fakeStream) snapshot() (body string, writeDeadline time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.body.String(), f.writeDeadline
+}
+
+// deadlineLog returns every write deadline set so far, in order.
+func (f *fakeStream) deadlineLog() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]time.Time(nil), f.deadlines...)
+}
+
+// wantDeadlines checks that each write set a deadline eventWriteTimeout after
+// its own time, then cleared it once the event was flushed (LIVE-1).
+func wantDeadlines(t *testing.T, f *fakeStream, writesAt ...time.Time) {
+	t.Helper()
+	var want []time.Time
+	for _, at := range writesAt {
+		want = append(want, at.Add(eventWriteTimeout), time.Time{})
+	}
+	got := f.deadlineLog()
+	if len(got) != len(want) {
+		t.Fatalf("LIVE-1: deadlines = %v, want %v", got, want)
+	}
+	for i := range want {
+		if !got[i].Equal(want[i]) {
+			t.Errorf("LIVE-1: deadline %d = %v, want %v", i, got[i], want[i])
+		}
+	}
 }
 
 // noFlushWriter cannot flush or set deadlines.
@@ -396,7 +425,8 @@ func runStream(t *testing.T, p *Pages, w http.ResponseWriter, ctx context.Contex
 }
 
 // LIVE-1: with no change for 25 s the stream writes a ": ping" comment, and
-// every write first sets a write deadline 10 s ahead.
+// every write first sets a write deadline 10 s ahead, then clears it once the
+// event is flushed, so an idle stream carries no stale deadline.
 func TestEvents_LIVE1_Heartbeat(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeStream()
@@ -409,9 +439,10 @@ func TestEvents_LIVE1_Heartbeat(t *testing.T) {
 		if body != "event: list\ndata: <tr>first</tr>\n\n" {
 			t.Fatalf("LIVE-1: first write = %q", body)
 		}
-		if !dl.Equal(start.Add(10 * time.Second)) {
-			t.Errorf("LIVE-1: write deadline = %v, want start + 10 s", dl.Sub(start))
+		if !dl.IsZero() {
+			t.Errorf("LIVE-1: write deadline still set after the flush: %v", dl.Sub(start))
 		}
+		wantDeadlines(t, f, start)
 
 		time.Sleep(25*time.Second - time.Nanosecond)
 		synctest.Wait()
@@ -420,13 +451,11 @@ func TestEvents_LIVE1_Heartbeat(t *testing.T) {
 		}
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
-		body, dl = f.snapshot()
+		body, _ = f.snapshot()
 		if !strings.HasSuffix(body, "\n\n: ping\n\n") {
 			t.Fatalf("LIVE-1: no heartbeat at 25 s: %q", body)
 		}
-		if !dl.Equal(start.Add(35 * time.Second)) {
-			t.Errorf("LIVE-1: heartbeat write deadline = %v, want 35 s after start", dl.Sub(start))
-		}
+		wantDeadlines(t, f, start, start.Add(25*time.Second))
 
 		time.Sleep(25 * time.Second)
 		synctest.Wait()
@@ -545,5 +574,75 @@ func TestFragments_EscapeValues(t *testing.T) {
 	}
 	if _, err := executeFragment("list", "missing", nil); err == nil {
 		t.Error("executeFragment with an unknown template = nil error")
+	}
+}
+
+// LIVE-1: a stream that ends because the client left (context.Canceled) or
+// its session was deleted (sessions.ErrNotFound) is a normal end and is logged
+// at Info; any other render failure is logged at Error. Either way the stream
+// ends.
+func TestEvents_LIVE1_RenderEndLogLevels(t *testing.T) {
+	boom := errors.New("boom")
+	for _, tc := range []struct {
+		name      string
+		err       error
+		wantLevel string
+	}{
+		{"client gone", fmt.Errorf("list sessions: %w", context.Canceled), "level=INFO"},
+		{"session deleted", fmt.Errorf("get session: %w", sessions.ErrNotFound), "level=INFO"},
+		{"other failure", boom, "level=ERROR"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var logs bytes.Buffer
+				p := &Pages{Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+				render := func(context.Context) ([]byte, error) { return nil, tc.err }
+				sub, wait := runStream(t, p, newFakeStream(), t.Context(), render)
+				sub <- struct{}{}
+				wait()
+				out := logs.String()
+				if !strings.Contains(out, tc.wantLevel) {
+					t.Errorf("LIVE-1: log = %q, want %s", out, tc.wantLevel)
+				}
+				if tc.wantLevel == "level=INFO" && strings.Contains(out, "level=ERROR") {
+					t.Errorf("LIVE-1: normal end logged as an error: %q", out)
+				}
+			})
+		})
+	}
+}
+
+// LIVE-1: clearing the deadline after the flush tolerates a writer that
+// cannot set deadlines, but any other failure to clear it ends the stream.
+func TestEvents_LIVE1_ClearDeadlineFailureEndsStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &clearFailStream{fakeStream: newFakeStream()}
+		_, wait := runStream(t, streamPages(), f, t.Context(), fixedRender("x"))
+		wait() // ends after the first write, without the context being cancelled
+		if body, _ := f.snapshot(); !strings.HasPrefix(body, "event: list\n") {
+			t.Errorf("body = %q", body)
+		}
+	})
+}
+
+// clearFailStream accepts a real deadline but fails to clear one.
+type clearFailStream struct{ *fakeStream }
+
+func (c *clearFailStream) SetWriteDeadline(t time.Time) error {
+	if t.IsZero() {
+		return errors.New("cannot clear")
+	}
+	return c.fakeStream.SetWriteDeadline(t)
+}
+
+// LIVE-3: with no sessions the list event still carries the table body and
+// its empty-state row. EventSource drops an event with empty data, and the
+// element live.js swaps must exist on the empty page too.
+func TestEvents_LIVE3_EmptyListFragmentIsNotEmpty(t *testing.T) {
+	e := newStreamEnv(t, 100, nil)
+	first := openStream(t, e.srv, "/events?view=list").mustNext("list")
+	wantContains(t, first, "<tbody>", "No sessions yet")
+	if page := e.get("/").Body.String(); !strings.Contains(page, `<div class="card" data-live="list">`+first) {
+		t.Errorf("LIVE-3: empty list event is not the content of the swapped element:\nevent: %s\npage: %s", first, page)
 	}
 }

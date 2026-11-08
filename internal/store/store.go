@@ -35,10 +35,13 @@ type Store struct {
 // New returns a Store that uses pool.
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
-// SessionWithReadings is a session with its readings sorted by time.
+// SessionWithReadings is a session with its readings sorted by time. Charger
+// is the chargers row with the session's charger ID, or nil if there is none
+// (LIVE-4). Only ListRecent fills it in.
 type SessionWithReadings struct {
 	Session  sessions.Session
 	Readings []billing.Reading
+	Charger  *ChargerRow
 }
 
 // querier is what both a pool and a transaction offer.
@@ -133,17 +136,18 @@ func (s *Store) AddReading(ctx context.Context, as sessions.Source, id string, r
 
 // StopSession stops a session (SES-3), refusing a writer that does not own it
 // (MIR-7). Repeating the identical stop returns the stored session and readings
-// unchanged.
-func (s *Store) StopSession(ctx context.Context, as sessions.Source, id string, stop billing.Reading, now time.Time) (sessions.Session, []billing.Reading, error) {
+// unchanged, with replay true, so callers can tell that nothing changed.
+func (s *Store) StopSession(ctx context.Context, as sessions.Source, id string, stop billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error) {
 	id, ok := parseUUID(id)
 	if !ok {
-		return sessions.Session{}, nil, sessions.ErrNotFound
+		return sessions.Session{}, nil, false, sessions.ErrNotFound
 	}
 	stop.At = norm(stop.At)
 
 	var (
 		out      sessions.Session
 		readings []billing.Reading
+		replay   bool
 	)
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		sess, rs, err := lockSession(ctx, tx, id)
@@ -153,7 +157,7 @@ func (s *Store) StopSession(ctx context.Context, as sessions.Source, id string, 
 		if err := sessions.CheckWriter(sess, as); err != nil {
 			return err
 		}
-		replay, err := sessions.CheckStop(sess, rs, stop, now)
+		replay, err = sessions.CheckStop(sess, rs, stop, now)
 		if err != nil {
 			return err
 		}
@@ -171,9 +175,9 @@ func (s *Store) StopSession(ctx context.Context, as sessions.Source, id string, 
 		return nil
 	})
 	if err != nil {
-		return sessions.Session{}, nil, ruleOrWrap(err, "stop session")
+		return sessions.Session{}, nil, false, ruleOrWrap(err, "stop session")
 	}
-	return out, readings, nil
+	return out, readings, replay, nil
 }
 
 // GetSession returns a session and its readings sorted by time, all in UTC.
@@ -193,60 +197,93 @@ func (s *Store) GetSession(ctx context.Context, id string) (sessions.Session, []
 	return sess, readings, nil
 }
 
+// listRecentSQL selects the newest sessions with their chargers row, if any
+// (LIVE-4). The LEFT JOIN keeps sessions whose charger ID has no row; for
+// them every c.* column is NULL, so has_charger is false and COALESCE turns
+// the NULLs into zero values that scanCharger's destinations can hold. The
+// zero values are never used: Charger stays nil.
+const listRecentSQL = `SELECT s.id::text, s.charger_id, s.source, s.started_at, s.meter_start_wh, s.stopped_at, s.meter_stop_wh,
+	c.charger_id IS NOT NULL AS has_charger,
+	COALESCE(c.charger_id, ''), COALESCE(c.location_name, ''), COALESCE(c.address, ''), COALESCE(c.postal_code, ''),
+	COALESCE(c.operator, ''), COALESCE(c.position, ''), COALESCE(c.plug_type, ''), COALESCE(c.current_type, ''),
+	COALESCE(c.power_w, 0), COALESCE(c.price, ''), COALESCE(c.price_type, ''), COALESCE(c.status, 0),
+	COALESCE(c.held, false), COALESCE(c.observed_at, 'epoch'::timestamptz)
+FROM sessions s LEFT JOIN chargers c ON c.charger_id = s.charger_id
+ORDER BY s.started_at DESC, s.id DESC
+LIMIT $1`
+
 // ListRecent returns up to limit sessions, newest started_at first, each with
-// its readings. Readings for the whole page come from one query.
+// its readings and its chargers row, if any (LIVE-4). Readings for the whole
+// page come from one query.
 func (s *Store) ListRecent(ctx context.Context, limit int) ([]SessionWithReadings, error) {
 	if limit < 1 {
 		return nil, fmt.Errorf("list recent sessions: limit must be at least 1, got %d", limit)
 	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+sessionColumns+` FROM sessions ORDER BY started_at DESC, id DESC LIMIT $1`, limit)
+	rows, err := s.pool.Query(ctx, listRecentSQL, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (SessionWithReadings, error) {
-		sess, err := scanSession(row)
-		return SessionWithReadings{Session: sess, Readings: []billing.Reading{}}, err
+		var (
+			item       = SessionWithReadings{Readings: []billing.Reading{}}
+			hasCharger bool
+			c          ChargerRow
+			status     int16
+		)
+		dest := append(sessionFields(&item.Session), &hasCharger)
+		if err := row.Scan(append(dest, chargerFields(&c, &status)...)...); err != nil {
+			return SessionWithReadings{}, err
+		}
+		utcSession(&item.Session)
+		if hasCharger {
+			finishCharger(&c, status)
+			item.Charger = &c
+		}
+		return item, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
-	if len(list) == 0 {
-		return list, nil
+	if err := attachReadings(ctx, s.pool, list); err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
 	}
+	return list, nil
+}
 
+// attachReadings loads the readings of every session in list with one query
+// and appends them, sorted by time and in UTC, to each item's Readings. It is
+// shared by ListRecent and OpenMirrorSessions.
+func attachReadings(ctx context.Context, q querier, list []SessionWithReadings) error {
+	if len(list) == 0 {
+		return nil
+	}
 	ids := make([]string, len(list))
 	index := make(map[string]int, len(list))
 	for i, item := range list {
 		ids[i] = item.Session.ID
 		index[item.Session.ID] = i
 	}
-	type row struct {
-		sessionID string
-		reading   billing.Reading
-	}
-	rrows, err := s.pool.Query(ctx,
+	rows, err := q.Query(ctx,
 		`SELECT session_id::text, at, meter_wh FROM meter_readings WHERE session_id = ANY($1::uuid[]) ORDER BY session_id, at`, ids)
 	if err != nil {
-		return nil, fmt.Errorf("list readings: %w", err)
+		return fmt.Errorf("load readings: %w", err)
 	}
-	all, err := pgx.CollectRows(rrows, func(r pgx.CollectableRow) (row, error) {
-		var x row
-		err := r.Scan(&x.sessionID, &x.reading.At, &x.reading.MeterWh)
-		x.reading.At = x.reading.At.UTC()
-		return x, err
+	var (
+		id string
+		r  billing.Reading
+	)
+	_, err = pgx.ForEachRow(rows, []any{&id, &r.At, &r.MeterWh}, func() error {
+		i, ok := index[id]
+		if !ok {
+			return fmt.Errorf("unexpected session id %s", id)
+		}
+		list[i].Readings = append(list[i].Readings, billing.Reading{At: r.At.UTC(), MeterWh: r.MeterWh})
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list readings: %w", err)
+		return fmt.Errorf("load readings: %w", err)
 	}
-	for _, x := range all {
-		i, ok := index[x.sessionID]
-		if !ok {
-			return nil, fmt.Errorf("list readings: unexpected session id %s", x.sessionID)
-		}
-		list[i].Readings = append(list[i].Readings, x.reading)
-	}
-	return list, nil
+	return nil
 }
 
 // inTx runs fn in a READ COMMITTED transaction and commits it. The
@@ -306,15 +343,25 @@ func loadReadings(ctx context.Context, q querier, id string) ([]billing.Reading,
 
 func scanSession(row pgx.Row) (sessions.Session, error) {
 	var sess sessions.Session
-	if err := row.Scan(&sess.ID, &sess.ChargerID, &sess.Source, &sess.StartedAt, &sess.MeterStartWh, &sess.StoppedAt, &sess.MeterStopWh); err != nil {
+	if err := row.Scan(sessionFields(&sess)...); err != nil {
 		return sessions.Session{}, err
 	}
+	utcSession(&sess)
+	return sess, nil
+}
+
+// sessionFields returns the scan destinations for sessionColumns, in order.
+func sessionFields(sess *sessions.Session) []any {
+	return []any{&sess.ID, &sess.ChargerID, &sess.Source, &sess.StartedAt, &sess.MeterStartWh, &sess.StoppedAt, &sess.MeterStopWh}
+}
+
+// utcSession puts a scanned session's times in UTC.
+func utcSession(sess *sessions.Session) {
 	sess.StartedAt = sess.StartedAt.UTC()
 	if sess.StoppedAt != nil {
 		stopped := sess.StoppedAt.UTC()
 		sess.StoppedAt = &stopped
 	}
-	return sess, nil
 }
 
 // parseUUID reports whether id is a well-formed UUID and returns it lowercased.

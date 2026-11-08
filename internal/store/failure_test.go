@@ -35,7 +35,7 @@ func storeOps() []storeOp {
 			return err
 		}},
 		{"StopSession", func(c context.Context, s *store.Store, id string) error {
-			_, _, err := s.StopSession(c, sessions.SourceAPI, id, r, now)
+			_, _, _, err := s.StopSession(c, sessions.SourceAPI, id, r, now)
 			return err
 		}},
 		{"GetSession", func(c context.Context, s *store.Store, id string) error {

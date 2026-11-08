@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -117,7 +118,7 @@ func (p *Pages) stream(w http.ResponseWriter, r *http.Request, event string, sub
 			}
 			html, err := renderWithin(r.Context(), render)
 			if err != nil {
-				log.Error("event stream failed", "op", "render", "error", err)
+				logRenderEnd(log, err)
 				return
 			}
 			frame = eventFrame(event, html)
@@ -131,18 +132,41 @@ func (p *Pages) stream(w http.ResponseWriter, r *http.Request, event string, sub
 	}
 }
 
-// writeEvent sets a fresh write deadline, writes frame and flushes it.
+// logRenderEnd logs a mid-stream render failure, which ends the stream. A
+// client that left (context.Canceled) or a session that was deleted
+// (sessions.ErrNotFound) is a normal end, logged at Info; anything else is an
+// Error.
+func logRenderEnd(log *slog.Logger, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, sessions.ErrNotFound) {
+		log.Info("event stream ended", "reason", "render stopped", "error", err)
+		return
+	}
+	log.Error("event stream failed", "op", "render", "error", err)
+}
+
+// writeEvent sets a fresh write deadline, writes frame, flushes it and then
+// clears the deadline, so no stale deadline is left on the connection while
+// the stream waits for the next event.
 // http.ErrNotSupported from SetWriteDeadline is not an error (test fakes
 // cannot set deadlines); any other failure is.
 func writeEvent(w http.ResponseWriter, rc *http.ResponseController, frame []byte) error {
-	if err := rc.SetWriteDeadline(time.Now().Add(eventWriteTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
-		return fmt.Errorf("set write deadline: %w", err)
+	if err := setWriteDeadline(rc, time.Now().Add(eventWriteTimeout)); err != nil {
+		return err
 	}
 	if _, err := w.Write(frame); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	if err := rc.Flush(); err != nil {
 		return fmt.Errorf("flush: %w", err)
+	}
+	return setWriteDeadline(rc, time.Time{})
+}
+
+// setWriteDeadline sets (or, with the zero time, clears) the write deadline,
+// tolerating a writer that does not support deadlines.
+func setWriteDeadline(rc *http.ResponseController, t time.Time) error {
+	if err := rc.SetWriteDeadline(t); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return fmt.Errorf("set write deadline: %w", err)
 	}
 	return nil
 }

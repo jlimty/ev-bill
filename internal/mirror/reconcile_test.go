@@ -303,9 +303,9 @@ func (c *cutStore) AddReading(ctx context.Context, as sessions.Source, id string
 	return c.Store.AddReading(ctx, as, id, r, now)
 }
 
-func (c *cutStore) StopSession(ctx context.Context, as sessions.Source, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, error) {
+func (c *cutStore) StopSession(ctx context.Context, as sessions.Source, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error) {
 	if err := c.cut(); err != nil {
-		return sessions.Session{}, nil, err
+		return sessions.Session{}, nil, false, err
 	}
 	return c.Store.StopSession(ctx, as, id, r, now)
 }
@@ -486,8 +486,8 @@ func (f *fakeStore) AddReading(context.Context, sessions.Source, string, billing
 	return sessions.Session{}, nil, false, f.errs["AddReading"]
 }
 
-func (f *fakeStore) StopSession(context.Context, sessions.Source, string, billing.Reading, time.Time) (sessions.Session, []billing.Reading, error) {
-	return sessions.Session{}, nil, f.errs["StopSession"]
+func (f *fakeStore) StopSession(context.Context, sessions.Source, string, billing.Reading, time.Time) (sessions.Session, []billing.Reading, bool, error) {
+	return sessions.Session{}, nil, false, f.errs["StopSession"]
 }
 
 func (f *fakeStore) UpsertChargers(_ context.Context, rows []store.ChargerRow) error {
@@ -572,9 +572,9 @@ func (f *failingStore) AddReading(ctx context.Context, as sessions.Source, id st
 	return f.Store.AddReading(ctx, as, id, r, now)
 }
 
-func (f *failingStore) StopSession(ctx context.Context, as sessions.Source, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, error) {
+func (f *failingStore) StopSession(ctx context.Context, as sessions.Source, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error) {
 	if f.method == "StopSession" {
-		return sessions.Session{}, nil, f.err
+		return sessions.Session{}, nil, false, f.err
 	}
 	return f.Store.StopSession(ctx, as, id, r, now)
 }
@@ -728,7 +728,7 @@ func TestReconcile_MIR7_StaleStopNotCarried(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := h.st.StopSession(ctx, sessions.SourceMirror, old.ID, billing.Reading{At: stopAt, MeterWh: tc.stopMeter}, stopAt); err != nil {
+			if _, _, _, err := h.st.StopSession(ctx, sessions.SourceMirror, old.ID, billing.Reading{At: stopAt, MeterWh: tc.stopMeter}, stopAt); err != nil {
 				t.Fatal(err)
 			}
 			h.apply(stopAt.Add(mins(5)), ac("SG-1", datamall.Available)) // held cleared
@@ -739,7 +739,7 @@ func TestReconcile_MIR7_StaleStopNotCarried(t *testing.T) {
 				t.Fatal(err)
 			}
 			h.apply(later, ac("SG-1", datamall.Occupied)) // MIR-7 skip
-			if _, _, err := h.st.StopSession(ctx, sessions.SourceAPI, api.ID, billing.Reading{At: later.Add(mins(2)), MeterWh: 100}, later.Add(mins(2))); err != nil {
+			if _, _, _, err := h.st.StopSession(ctx, sessions.SourceAPI, api.ID, billing.Reading{At: later.Add(mins(2)), MeterWh: 100}, later.Add(mins(2))); err != nil {
 				t.Fatal(err)
 			}
 			h.apply(later.Add(mins(5)), ac("SG-1", datamall.Occupied))

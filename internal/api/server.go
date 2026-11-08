@@ -13,13 +13,24 @@ import (
 	"github.com/jlimty/ev-bill/internal/store"
 )
 
-// Server holds what the handlers need.
+// Server holds what the handlers need. OnChange, if set, runs after each
+// write that changed a session (a start, a new reading, a stop), so the live
+// pages re-render (LIVE-3). An identical repeat changes nothing and does not
+// call it.
 type Server struct {
-	Store  *store.Store
-	Tariff billing.Tariff
-	APIKey string
-	Now    func() time.Time
-	Logger *slog.Logger
+	Store    *store.Store
+	Tariff   billing.Tariff
+	APIKey   string
+	Now      func() time.Time
+	Logger   *slog.Logger
+	OnChange func()
+}
+
+// changed calls OnChange if it is set.
+func (s *Server) changed() {
+	if s.OnChange != nil {
+		s.OnChange()
+	}
 }
 
 // Register adds the session routes to mux. The three POSTs need the API key

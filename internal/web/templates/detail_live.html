@@ -1,7 +1,10 @@
 {{define "detail_live"}}<div class="card">
 <dl>
-<dt>Charger</dt><dd>{{.Charger}}</dd>
-<dt>Status</dt><dd><span class="badge {{.Status}}">{{.Status}}</span></dd>
+<dt>Charger</dt><dd>{{.Charger}} <span class="source {{.Source}}">{{.Source}}</span></dd>
+{{with .Location}}<dt>Location</dt><dd>{{.}}</dd>
+{{end}}{{with .Operator}}<dt>Operator</dt><dd>{{.}}</dd>
+{{end}}{{with .Power}}<dt>Power</dt><dd>{{.}}</dd>
+{{end}}<dt>Status</dt><dd><span class="badge {{.Status}}">{{.Status}}</span></dd>
 <dt>Started</dt><dd>{{.Started}}</dd>
 <dt>Stopped</dt><dd>{{.Stopped}}</dd>
 </dl>

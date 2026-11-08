@@ -1,5 +1,6 @@
 {{define "content"}}
 <p><a href="/">&larr; All sessions</a></p>
 <h1>Session on {{.Charger}}</h1>
-{{template "detail_live" .}}
+{{with .Notice}}<p class="notice">{{.}}</p>
+{{end}}<div data-live="session">{{template "detail_live" .}}</div>
 {{end}}

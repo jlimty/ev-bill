@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-{{if .Refresh}}<meta http-equiv="refresh" content="3">
+{{if .Stream}}<noscript><meta http-equiv="refresh" content="3"></noscript>
+<script src="/static/live.js" defer></script>
 {{end}}<title>{{.Title}} · EV billing</title>
 <style>
 :root { --ink:#1b2430; --muted:#566170; --line:#d8dde3; --bg:#f6f7f9; --card:#fff;
@@ -34,16 +35,28 @@ dd { margin:0; }
 .seg .times { font-size:.85rem; line-height:1.3; color:var(--muted); padding-top:.25rem; white-space:normal; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
 .seg.peak .block { background:var(--peak); color:var(--peak-ink); }
 .seg.offpeak .block { background:var(--off); color:var(--off-ink); }
-.empty { text-align:center; color:var(--muted); padding:2rem 1rem; }
+.empty { text-align:center; color:var(--muted); padding:2rem 1rem; white-space:normal; }
+.source { display:inline-block; padding:0 .4rem; border-radius:4px; font-size:.75rem; font-weight:600; vertical-align:middle; }
+.source.mirror { color:#0b4f8a; background:#e2eefb; }
+.source.simulated { color:#4b5563; background:#eef0f3; }
+.sub { color:var(--muted); font-size:.85rem; }
+.tariff { margin:.25rem 0 0; color:var(--muted); font-size:.9rem; }
+.notice { color:var(--muted); font-size:.9rem; margin:0 0 1rem; }
+.feed { margin:0 0 .75rem; color:var(--muted); font-size:.9rem; }
+.feed.warn { color:#8a3b00; font-weight:600; }
 footer { color:var(--muted); font-size:.85rem; padding-bottom:2rem; }
+footer p { margin:.25rem 0; }
 </style>
 </head>
-<body>
-<header><a href="/">EV billing</a></header>
+<body{{with .Stream}} data-stream="{{.}}"{{end}}>
+<header><a href="/">EV billing</a><p class="tariff">{{.Tariff}}</p></header>
 <main>
 {{template "content" .}}
 </main>
-<footer>Times are shown in {{.TZ}}.{{if .Refresh}} This page refreshes every 3 seconds.{{end}}</footer>
+<footer>
+<p>Times are shown in {{.TZ}}.{{if .Stream}} This page updates live.{{end}}</p>
+<p>Charger data: LTA DataMall EV Charging Points.</p>
+</footer>
 </body>
 </html>
 {{end}}

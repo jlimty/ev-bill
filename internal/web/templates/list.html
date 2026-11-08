@@ -1,14 +1,5 @@
 {{define "content"}}
 <h1>Charging sessions</h1>
-<div class="card">
-{{if .Rows}}
-<table>
-<thead><tr><th>Charger</th><th>Started</th><th>Status</th><th class="num">Energy</th><th class="num">Cost</th></tr></thead>
-<tbody>
-{{template "list_body" .}}</tbody>
-</table>
-{{else}}
-<p class="empty">No sessions yet. Sessions appear here as soon as a charger starts one.</p>
-{{end}}
-</div>
+<p class="notice">{{.Notice}}</p>
+<div class="card" data-live="list">{{template "list_body" .}}</div>
 {{end}}

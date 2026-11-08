@@ -19,6 +19,8 @@ import (
 	"github.com/mxschmitt/playwright-go"
 
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/datamall"
+	"github.com/jlimty/ev-bill/internal/live"
 	"github.com/jlimty/ev-bill/internal/server"
 	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
@@ -49,11 +51,10 @@ func must(t *testing.T, what string, err error) {
 // TestStatusPages_UI1_UI2_BIL5 checks the list and detail pages in headless
 // Chromium: badges and totals (UI-1), segment rows, boundary times and bar
 // widths (UI-2, BIL-5), and that the CSP does not stop inline styles or
-// produce console errors.
+// produce console errors or CSP violations (LIVE-3).
 func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(testdb.New(t))
-	tariff := billing.SingaporeTariff()
 
 	// Completed mockup session: Peak 9600 Wh $5.95, Off-peak 8400 Wh $4.03, $9.98.
 	done, err := st.CreateSession(ctx, sessions.SourceAPI, "CP-01", sgt(6, 21, 40), 0, fixedNow())
@@ -62,7 +63,7 @@ func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 		_, _, _, err := st.AddReading(ctx, sessions.SourceAPI, done.ID, r, fixedNow())
 		must(t, "add reading", err)
 	}
-	_, _, err = st.StopSession(ctx, sessions.SourceAPI, done.ID, billing.Reading{At: sgt(7, 0, 15), MeterWh: 18000}, fixedNow())
+	_, _, _, err = st.StopSession(ctx, sessions.SourceAPI, done.ID, billing.Reading{At: sgt(7, 0, 15), MeterWh: 18000}, fixedNow())
 	must(t, "stop CP-01", err)
 
 	// Active session with a reading 10 minutes ago, so it is charging (SES-4).
@@ -71,74 +72,15 @@ func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 	_, _, _, err = st.AddReading(ctx, sessions.SourceAPI, active.ID, billing.Reading{At: sgt(7, 0, 10), MeterWh: 1000}, fixedNow())
 	must(t, "add CP-02 reading", err)
 
-	srv := httptest.NewServer(server.New(server.Deps{
-		Store:  st,
-		Tariff: tariff,
-		APIKey: "test-key",
-		Now:    fixedNow,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}))
-	t.Cleanup(srv.Close)
-
-	// A launch failure fails the test. It must never skip, or the test would pass vacuously.
-	pw, err := playwright.Run()
-	if err != nil {
-		t.Fatalf("start Playwright (%s): %v", installHint, err)
-	}
-	t.Cleanup(func() {
-		if err := pw.Stop(); err != nil {
-			t.Errorf("stop Playwright: %v", err)
-		}
-	})
-	browser, err := pw.Chromium.Launch()
-	if err != nil {
-		t.Fatalf("launch Chromium (%s): %v", installHint, err)
-	}
-	t.Cleanup(func() {
-		if err := browser.Close(); err != nil {
-			t.Errorf("close browser: %v", err)
-		}
-	})
-	page, err := browser.NewPage()
-	must(t, "new page", err)
-
-	expect := playwright.NewPlaywrightAssertions(expectTimeout)
-
-	var mu sync.Mutex
-	var consoleErrors []string
-	page.On("console", func(m playwright.ConsoleMessage) {
-		if m.Type() == "error" {
-			mu.Lock()
-			consoleErrors = append(consoleErrors, m.Text())
-			mu.Unlock()
-		}
-	})
-	page.On("pageerror", func(e error) {
-		mu.Lock()
-		consoleErrors = append(consoleErrors, e.Error())
-		mu.Unlock()
-	})
-
-	// Registered last, so it runs before the browser closes and reports even
-	// after an earlier failure. The final assertion gives late console events
-	// time to arrive before the slice is read.
-	t.Cleanup(func() {
-		if err := expect.Locator(page.Locator("body")).ToBeVisible(); err != nil {
-			t.Errorf("final page check: %v", err)
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if len(consoleErrors) > 0 {
-			t.Errorf("console errors: %v", consoleErrors)
-		}
-	})
+	srv, _ := startServer(t, st)
+	page, expect := openBrowser(t)
 
 	// UI-1: the list shows each session's status badge and cost.
 	_, err = page.Goto(srv.URL + "/")
 	must(t, "open list", err)
 	doneRow := page.Locator("tbody tr").Filter(playwright.LocatorFilterOptions{HasText: "CP-01"})
 	must(t, "CP-01 badge", expect.Locator(doneRow.Locator(".badge")).ToHaveText("completed"))
-	must(t, "CP-01 cost", expect.Locator(doneRow.Locator("td").Nth(4)).ToHaveText("$9.98"))
+	must(t, "CP-01 cost", expect.Locator(doneRow.Locator("td").Nth(5)).ToHaveText("$9.98"))
 	activeRow := page.Locator("tbody tr").Filter(playwright.LocatorFilterOptions{HasText: "CP-02"})
 	must(t, "CP-02 badge", expect.Locator(activeRow.Locator(".badge")).ToHaveText("charging"))
 
@@ -182,5 +124,151 @@ func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 		if got < want-0.5 || got > want+0.5 {
 			t.Errorf("segment %d rendered width = %.2f%% of the bar, want %v%% (CSP may be blocking inline styles)", i, got, want)
 		}
+	}
+}
+
+// startServer serves the full handler, as cmd/server builds it, with a
+// running hub so live.js can open its stream. Cleanups run in reverse, so the
+// hub stops (ending any open stream) before the server closes.
+func startServer(t *testing.T, st *store.Store) (*httptest.Server, *live.Hub) {
+	t.Helper()
+	hub := live.NewHub(100)
+	srv := httptest.NewServer(server.New(server.Deps{
+		Store:  st,
+		Tariff: billing.SingaporeTariff(),
+		APIKey: "test-key",
+		Now:    fixedNow,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Hub:    hub,
+		Feed:   &live.Feed{},
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- hub.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("hub.Run = %v", err)
+		}
+	})
+	return srv, hub
+}
+
+// cspRecorder is injected before any page script runs. It records every CSP
+// violation the page reports, so the test can fail on one even if the
+// browser's console message for it were missed.
+const cspRecorder = `window.__cspViolations = [];
+document.addEventListener('securitypolicyviolation', function (e) {
+  window.__cspViolations.push(e.violatedDirective + ' ' + e.blockedURI);
+});`
+
+// openBrowser launches headless Chromium and opens a page. When the test ends
+// it fails on any console error, uncaught page error or CSP violation. A
+// launch failure fails the test: it must never skip, or the test would pass
+// vacuously.
+func openBrowser(t *testing.T) (playwright.Page, playwright.PlaywrightAssertions) {
+	t.Helper()
+	pw, err := playwright.Run()
+	if err != nil {
+		t.Fatalf("start Playwright (%s): %v", installHint, err)
+	}
+	t.Cleanup(func() {
+		if err := pw.Stop(); err != nil {
+			t.Errorf("stop Playwright: %v", err)
+		}
+	})
+	browser, err := pw.Chromium.Launch()
+	if err != nil {
+		t.Fatalf("launch Chromium (%s): %v", installHint, err)
+	}
+	t.Cleanup(func() {
+		if err := browser.Close(); err != nil {
+			t.Errorf("close browser: %v", err)
+		}
+	})
+	page, err := browser.NewPage()
+	must(t, "new page", err)
+	script := cspRecorder
+	must(t, "add CSP recorder", page.AddInitScript(playwright.Script{Content: &script}))
+
+	expect := playwright.NewPlaywrightAssertions(expectTimeout)
+
+	var mu sync.Mutex
+	var consoleErrors []string
+	page.On("console", func(m playwright.ConsoleMessage) {
+		if m.Type() == "error" {
+			mu.Lock()
+			consoleErrors = append(consoleErrors, m.Text())
+			mu.Unlock()
+		}
+	})
+	page.On("pageerror", func(e error) {
+		mu.Lock()
+		consoleErrors = append(consoleErrors, e.Error())
+		mu.Unlock()
+	})
+
+	// Registered last, so it runs before the browser closes and reports even
+	// after an earlier failure. The final assertion gives late console events
+	// time to arrive before the slice is read.
+	t.Cleanup(func() {
+		if err := expect.Locator(page.Locator("body")).ToBeVisible(); err != nil {
+			t.Errorf("final page check: %v", err)
+		}
+		violations, err := page.Evaluate("() => window.__cspViolations")
+		if err != nil {
+			t.Errorf("read CSP violations: %v", err)
+		} else if list, ok := violations.([]any); !ok || len(list) > 0 {
+			t.Errorf("LIVE-3: CSP violations: %v", violations)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(consoleErrors) > 0 {
+			t.Errorf("console errors: %v", consoleErrors)
+		}
+	})
+	return page, expect
+}
+
+// TestStatusPages_LIVE3_UpdatesWithoutReload opens the list page, then makes
+// a mirror session appear through the store and the hub, as a reconcile cycle
+// does. The row must show up within 5 s without a reload: a marker set on the
+// page's window before the change is still there afterwards. It all runs
+// under the real CSP with no console errors or CSP violations.
+func TestStatusPages_LIVE3_UpdatesWithoutReload(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(testdb.New(t))
+	srv, hub := startServer(t, st)
+	page, expect := openBrowser(t)
+
+	_, err := page.Goto(srv.URL + "/")
+	must(t, "open list", err)
+	must(t, "empty list", expect.Locator(page.Locator("tbody")).ToContainText("No sessions yet"))
+	_, err = page.Evaluate("() => { window.__marker = 1 }")
+	must(t, "set marker", err)
+
+	err = st.UpsertChargers(ctx, []store.ChargerRow{{
+		Connector: datamall.Connector{
+			ChargerID: "CHARGER-LIVE", LocationName: "Test Mall", Address: "1 Test Road", PostalCode: "100001",
+			Operator: "Testco", Position: "B1", PlugType: "Type 2", Current: "AC", PowerW: 7_400,
+			Price: "0.5000", Status: datamall.Occupied,
+		},
+		ObservedAt: sgt(7, 0, 18),
+	}})
+	must(t, "upsert charger", err)
+	_, err = st.CreateSession(ctx, sessions.SourceMirror, "CHARGER-LIVE", sgt(7, 0, 18), 0, fixedNow())
+	must(t, "create mirror session", err)
+	hub.Publish()
+
+	row := page.Locator("tbody tr").Filter(playwright.LocatorFilterOptions{HasText: "CHARGER-LIVE"})
+	must(t, "LIVE-3: row appears", expect.Locator(row).ToBeVisible(playwright.LocatorAssertionsToBeVisibleOptions{Timeout: playwright.Float(5000)}))
+	must(t, "LIVE-4: mirror label", expect.Locator(row.Locator(".source")).ToHaveText("mirror"))
+	must(t, "LIVE-4: location", expect.Locator(row).ToContainText("Test Mall"))
+
+	marker, err := page.Evaluate("() => window.__marker")
+	must(t, "read marker", err)
+	if n, ok := marker.(int); !ok || n != 1 {
+		t.Errorf("LIVE-3: window.__marker = %v (%T), want 1: the page reloaded", marker, marker)
 	}
 }

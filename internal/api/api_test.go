@@ -33,6 +33,7 @@ type env struct {
 	router routers.Router
 	pool   *pgxpool.Pool
 	logs   *bytes.Buffer
+	srv    *Server
 }
 
 func newEnv(t *testing.T) *env {
@@ -48,7 +49,7 @@ func newEnv(t *testing.T) *env {
 	}
 	mux := http.NewServeMux()
 	srv.Register(mux)
-	return &env{t: t, mux: mux, router: contractRouter(t), pool: pool, logs: logs}
+	return &env{t: t, mux: mux, router: contractRouter(t), pool: pool, logs: logs, srv: srv}
 }
 
 // do sends a request (with the right API key unless key is empty), checks the
@@ -588,5 +589,50 @@ func TestAPI_MIR7_SourceInResponses(t *testing.T) {
 	}
 	if have[apiID] != "api" || have[mirror.ID] != "mirror" {
 		t.Errorf("MIR-7: list sources = %v", have)
+	}
+}
+
+// LIVE-3: every write that changes a session signals the live pages through
+// OnChange: a start, a new reading and a stop. An identical repeat of a
+// reading or a stop changes nothing, so it does not signal; nor does a
+// refused write or a read.
+func TestAPI_LIVE3_WritesSignalOnChange(t *testing.T) {
+	e := newEnv(t)
+	var changes int
+	e.srv.OnChange = func() { changes++ }
+	step := func(what string, rec *httptest.ResponseRecorder, wantStatus, wantChanges int) {
+		t.Helper()
+		if rec.Code != wantStatus {
+			t.Fatalf("%s: status = %d, want %d; %s", what, rec.Code, wantStatus, rec.Body.String())
+		}
+		if changes != wantChanges {
+			t.Errorf("LIVE-3: after %s OnChange ran %d times, want %d", what, changes, wantChanges)
+		}
+	}
+
+	rec := e.post("/api/sessions", startBody("CP-01", t2140, 0))
+	step("start", rec, http.StatusCreated, 1)
+	id := decodeSession(t, rec).ID
+	path := "/api/sessions/" + id
+	step("refused start", e.post("/api/sessions", startBody("CP-01", t2140, 0)), http.StatusConflict, 1)
+	step("new reading", e.post(path+"/meter-values", meterBody(t2220, 4800)), http.StatusCreated, 2)
+	step("duplicate reading", e.post(path+"/meter-values", meterBody(t2220, 4800)), http.StatusOK, 2)
+	step("conflicting reading", e.post(path+"/meter-values", meterBody(t2220, 4900)), http.StatusConflict, 2)
+	step("stop", e.post(path+"/stop", stopBody(t0015, 18000)), http.StatusOK, 3)
+	step("identical stop replay", e.post(path+"/stop", stopBody(t0015, 18000)), http.StatusOK, 3)
+	step("conflicting stop", e.post(path+"/stop", stopBody(t0015, 18001)), http.StatusConflict, 3)
+	step("get", e.get(path), http.StatusOK, 3)
+	step("list", e.get("/api/sessions"), http.StatusOK, 3)
+}
+
+// LIVE-3: OnChange is optional; with none set, writes still succeed.
+func TestAPI_LIVE3_NilOnChange(t *testing.T) {
+	e := newEnv(t)
+	id := e.startSession("CP-01", t2140, 0)
+	if rec := e.post("/api/sessions/"+id+"/meter-values", meterBody(t2220, 4800)); rec.Code != http.StatusCreated {
+		t.Fatalf("reading = %d, want 201", rec.Code)
+	}
+	if rec := e.post("/api/sessions/"+id+"/stop", stopBody(t0015, 18000)); rec.Code != http.StatusOK {
+		t.Fatalf("stop = %d, want 200", rec.Code)
 	}
 }
