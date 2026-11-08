@@ -1,0 +1,216 @@
+package web
+
+import (
+	"bytes"
+	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/store"
+	"github.com/jlimty/ev-bill/internal/testdb"
+)
+
+// fixedNow is 2026-11-07 00:20 SGT.
+func fixedNow() time.Time {
+	return time.Date(2026, 11, 7, 0, 20, 0, 0, billing.SingaporeTariff().Location)
+}
+
+type env struct {
+	t    *testing.T
+	st   *store.Store
+	pool *pgxpool.Pool
+	mux  *http.ServeMux
+	logs *bytes.Buffer
+}
+
+func newEnv(t *testing.T) *env {
+	t.Helper()
+	pool := testdb.New(t)
+	logs := &bytes.Buffer{}
+	st := store.New(pool)
+	p := &Pages{Store: st, Tariff: billing.SingaporeTariff(), Now: fixedNow, Logger: slog.New(slog.NewTextHandler(logs, nil))}
+	mux := http.NewServeMux()
+	p.Register(mux)
+	return &env{t: t, st: st, pool: pool, mux: mux, logs: logs}
+}
+
+func (e *env) get(path string) *httptest.ResponseRecorder {
+	e.t.Helper()
+	rec := httptest.NewRecorder()
+	e.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
+}
+
+func sgt(h, m int, day int) time.Time {
+	return time.Date(2026, 11, day, h, m, 0, 0, billing.SingaporeTariff().Location)
+}
+
+func (e *env) start(charger string, at time.Time) string {
+	e.t.Helper()
+	s, err := e.st.CreateSession(context.Background(), charger, at, 0, fixedNow())
+	if err != nil {
+		e.t.Fatalf("create session: %v", err)
+	}
+	return s.ID
+}
+
+func (e *env) reading(id string, at time.Time, wh int64) {
+	e.t.Helper()
+	if _, _, _, err := e.st.AddReading(context.Background(), id, billing.Reading{At: at, MeterWh: wh}, fixedNow()); err != nil {
+		e.t.Fatalf("add reading: %v", err)
+	}
+}
+
+// mockup seeds the completed mockup session: 21:40 to 00:15, 18 kWh, $9.98.
+func (e *env) mockup(charger string) string {
+	e.t.Helper()
+	id := e.start(charger, sgt(21, 40, 6))
+	e.reading(id, sgt(22, 20, 6), 4800)
+	e.reading(id, sgt(23, 0, 6), 9600)
+	if _, _, err := e.st.StopSession(context.Background(), id, billing.Reading{At: sgt(0, 15, 7), MeterWh: 18000}, fixedNow()); err != nil {
+		e.t.Fatalf("stop session: %v", err)
+	}
+	return id
+}
+
+func wantContains(t *testing.T, body string, subs ...string) {
+	t.Helper()
+	for _, s := range subs {
+		if !strings.Contains(body, s) {
+			t.Errorf("body missing %q", s)
+		}
+	}
+}
+
+func wantHTML(t *testing.T, rec *httptest.ResponseRecorder, status int) {
+	t.Helper()
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d; body %s", rec.Code, status, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+}
+
+const refreshMeta = `<meta http-equiv="refresh" content="3">`
+
+// UI-1: newest first, status text, energy and cost, links, 3 s refresh.
+func TestListPage_UI1(t *testing.T) {
+	e := newEnv(t)
+	e.mockup("CP-OLD")
+	newID := e.start("CP-NEW", sgt(0, 15, 7))
+	e.reading(newID, sgt(0, 18, 7), 1000)
+
+	rec := e.get("/")
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	wantContains(t, body, refreshMeta, "completed", "charging", "$9.98", "18.0 kWh", "1.0 kWh",
+		"07 Nov 00:15", `href="/sessions/`+newID+`"`)
+	if strings.Index(body, "CP-NEW") > strings.Index(body, "CP-OLD") || !strings.Contains(body, "CP-NEW") {
+		t.Errorf("CP-NEW must appear before CP-OLD")
+	}
+}
+
+// UI-1: an empty list is a friendly message, not an empty table.
+func TestListPage_UI1_Empty(t *testing.T) {
+	rec := newEnv(t).get("/")
+	wantHTML(t, rec, http.StatusOK)
+	wantContains(t, rec.Body.String(), "No sessions yet", refreshMeta)
+}
+
+// UI-2, BIL-5: the mockup session shows both segments, boundary times and the total.
+func TestDetailPage_UI2_MockupSession(t *testing.T) {
+	e := newEnv(t)
+	id := e.mockup("CP-01")
+	rec := e.get("/sessions/" + id)
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	wantContains(t, body, "CP-01", "completed", "Peak", "Off-peak", "21:40", "23:00", "00:15",
+		"$5.95", "$4.03", "$9.98", "9.6 kWh", "8.4 kWh", "18.0 kWh", "62", "48",
+		`style="width: 51.6%"`, `style="width: 48.4%"`)
+	if strings.Count(body, `class="seg `) != 2 {
+		t.Errorf("want 2 bar segments, body %s", body)
+	}
+}
+
+// UI-2: the page refreshes while the session is charging, not once completed.
+func TestDetailPage_UI2_RefreshOnlyWhileNotCompleted(t *testing.T) {
+	e := newEnv(t)
+	active := e.start("CP-01", sgt(0, 15, 7))
+	wantContains(t, e.get("/sessions/"+active).Body.String(), refreshMeta)
+
+	done := e.mockup("CP-02")
+	if strings.Contains(e.get("/sessions/"+done).Body.String(), "http-equiv") {
+		t.Errorf("completed session must not refresh")
+	}
+}
+
+// UI-2, SES-4: an active session without readings shows zeros and no bar.
+func TestDetailPage_ActiveWithoutReadings(t *testing.T) {
+	e := newEnv(t)
+	id := e.start("CP-01", sgt(0, 15, 7))
+	rec := e.get("/sessions/" + id)
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	wantContains(t, body, "0.0 kWh", "$0.00", "charging")
+	if strings.Contains(body, `class="bar"`) {
+		t.Errorf("no bar element expected without segments")
+	}
+}
+
+// UI-2, SES-4: a session with no reading for over 15 minutes shows as stale.
+func TestDetailPage_StaleStatus(t *testing.T) {
+	e := newEnv(t)
+	id := e.start("CP-01", sgt(21, 40, 6))
+	wantContains(t, e.get("/sessions/"+id).Body.String(), "stale")
+}
+
+// UI-2: unknown and malformed ids are an HTML 404.
+func TestDetailPage_UnknownIs404(t *testing.T) {
+	e := newEnv(t)
+	for _, id := range []string{"0b9a1f6e-6a39-4d3c-8f0e-1c2d3e4f5a6b", "not-a-uuid"} {
+		rec := e.get("/sessions/" + id)
+		wantHTML(t, rec, http.StatusNotFound)
+		wantContains(t, rec.Body.String(), "not found")
+	}
+}
+
+// UI-1, UI-2: a store failure is a generic 500 page; the cause is logged, never shown.
+func TestPages_StoreFailureIs500(t *testing.T) {
+	e := newEnv(t)
+	id := e.start("CP-01", sgt(0, 15, 7))
+	e.pool.Close()
+	for _, path := range []string{"/", "/sessions/" + id} {
+		rec := e.get(path)
+		wantHTML(t, rec, http.StatusInternalServerError)
+		body := rec.Body.String()
+		wantContains(t, body, "Something went wrong")
+		for _, leak := range []string{"closed pool", "pgx", "sql", "ListRecent", "list sessions", "get session"} {
+			if strings.Contains(strings.ToLower(body), strings.ToLower(leak)) {
+				t.Errorf("%s: body leaks %q", path, leak)
+			}
+		}
+	}
+	if !strings.Contains(e.logs.String(), "level=ERROR") {
+		t.Errorf("error not logged: %q", e.logs.String())
+	}
+}
+
+// UI-1, UI-2: values are escaped by html/template (no template.HTML in use).
+func TestTemplates_EscapeValues(t *testing.T) {
+	var buf bytes.Buffer
+	data := errorPage{layoutData: layoutData{Title: "<script>x</script>"}, Heading: `<b>"h"</b>`, Message: "m"}
+	if err := pageTemplates["error"].ExecuteTemplate(&buf, "layout", data); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Contains(buf.String(), "<script>x") || strings.Contains(buf.String(), "<b>") {
+		t.Errorf("unescaped output: %s", buf.String())
+	}
+}

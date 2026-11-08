@@ -1,0 +1,49 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{if .Refresh}}<meta http-equiv="refresh" content="3">
+{{end}}<title>{{.Title}} · EV billing</title>
+<style>
+:root { --ink:#1b2430; --muted:#566170; --line:#d8dde3; --bg:#f6f7f9; --card:#fff;
+  --peak:#f5b942; --peak-ink:#2b1a00; --off:#0f766e; --off-ink:#fff; --link:#0b5cad; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+header, main, footer { max-width:56rem; margin:0 auto; padding:0 1rem; }
+header { padding-top:1.5rem; padding-bottom:.5rem; }
+header a { color:var(--ink); font-weight:700; text-decoration:none; }
+h1 { font-size:1.5rem; margin:.5rem 0 1rem; }
+a { color:var(--link); }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:1rem; margin-bottom:1rem; overflow-x:auto; }
+table { width:100%; border-collapse:collapse; }
+th, td { text-align:left; padding:.5rem .75rem; border-bottom:1px solid var(--line); white-space:nowrap; }
+th { color:var(--muted); font-size:.85rem; font-weight:600; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+tfoot td { font-weight:700; border-bottom:0; }
+.badge { display:inline-block; padding:.1rem .6rem; border-radius:999px; font-size:.85rem; font-weight:600; border:1px solid currentColor; }
+.charging { color:#0b5f2a; background:#e3f5e9; }
+.stale { color:#8a3b00; background:#fdebd8; }
+.completed { color:#3d4756; background:#e9ecf0; }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:.25rem 1rem; margin:0; }
+dt { color:var(--muted); }
+dd { margin:0; }
+.bar { display:flex; list-style:none; margin:0; padding:0; gap:2px; }
+.seg { min-width:0; }
+.seg .block { padding:.5rem; border-radius:4px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.seg .times { font-size:.85rem; color:var(--muted); padding-top:.25rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.seg.peak .block { background:var(--peak); color:var(--peak-ink); }
+.seg.offpeak .block { background:var(--off); color:var(--off-ink); }
+.empty { text-align:center; color:var(--muted); padding:2rem 1rem; }
+footer { color:var(--muted); font-size:.85rem; padding-bottom:2rem; }
+</style>
+</head>
+<body>
+<header><a href="/">EV billing</a></header>
+<main>
+{{template "content" .}}
+</main>
+<footer>Times are shown in {{.TZ}}.{{if .Refresh}} This page refreshes every 3 seconds.{{end}}</footer>
+</body>
+</html>
+{{end}}
