@@ -52,14 +52,17 @@ FROM occupancy_samples
 WHERE observed_at >= $1 AND postal_code = ANY($2::text[])
 GROUP BY postal_code, hour`
 
+// energyWhSQL is a session's energy in Wh (LOC-6, NAV-3): the stop meter, else
+// the highest reading, else the start meter, minus the start meter. It matches
+// the energy billing derives from the same data. The query must alias sessions
+// as s.
+const energyWhSQL = `coalesce(s.meter_stop_wh, (SELECT max(r.meter_wh) FROM meter_readings r WHERE r.session_id = s.id), s.meter_start_wh) - s.meter_start_wh`
+
 // sessionsSQL lists the mirror sessions started since $1 at the scope's
 // chargers ($2), each with its start and its energy (LOC-6): the stop meter,
 // else the highest reading, else the start meter, minus the start meter.
 // addLocationSessions narrows each site to its own window.
-const sessionsSQL = `SELECT s.charger_id, s.started_at,
-	coalesce(s.meter_stop_wh,
-		(SELECT max(r.meter_wh) FROM meter_readings r WHERE r.session_id = s.id),
-		s.meter_start_wh) - s.meter_start_wh
+const sessionsSQL = `SELECT s.charger_id, s.started_at, ` + energyWhSQL + `
 FROM sessions s
 WHERE s.source = 'mirror' AND s.started_at >= $1 AND s.charger_id = ANY($2::text[])`
 

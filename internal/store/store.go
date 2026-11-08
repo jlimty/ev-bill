@@ -197,18 +197,8 @@ func (s *Store) GetSession(ctx context.Context, id string) (sessions.Session, []
 	return sess, readings, nil
 }
 
-// listRecentSQL selects the newest sessions with their chargers row, if any
-// (LIVE-4). The LEFT JOIN keeps sessions whose charger ID has no row; for
-// them every c.* column is NULL, so has_charger is false and COALESCE turns
-// the NULLs into zero values that scanCharger's destinations can hold. The
-// zero values are never used: Charger stays nil.
-const listRecentSQL = `SELECT s.id::text, s.charger_id, s.source, s.started_at, s.meter_start_wh, s.stopped_at, s.meter_stop_wh,
-	c.charger_id IS NOT NULL AS has_charger,
-	COALESCE(c.charger_id, ''), COALESCE(c.location_name, ''), COALESCE(c.address, ''), COALESCE(c.postal_code, ''),
-	COALESCE(c.operator, ''), COALESCE(c.position, ''), COALESCE(c.plug_type, ''), COALESCE(c.current_type, ''),
-	COALESCE(c.power_w, 0), COALESCE(c.price, ''), COALESCE(c.price_type, ''), COALESCE(c.status, 0),
-	COALESCE(c.held, false), COALESCE(c.observed_at, 'epoch'::timestamptz)
-FROM sessions s LEFT JOIN chargers c ON c.charger_id = s.charger_id
+// listRecentSQL is the newest sessions first (LIVE-4).
+const listRecentSQL = listSelectSQL + `
 ORDER BY s.started_at DESC, s.id DESC
 LIMIT $1`
 
@@ -223,24 +213,7 @@ func (s *Store) ListRecent(ctx context.Context, limit int) ([]SessionWithReading
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
-	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (SessionWithReadings, error) {
-		var (
-			item       = SessionWithReadings{Readings: []billing.Reading{}}
-			hasCharger bool
-			c          ChargerRow
-			status     int16
-		)
-		dest := append(sessionFields(&item.Session), &hasCharger)
-		if err := row.Scan(append(dest, chargerFields(&c, &status)...)...); err != nil {
-			return SessionWithReadings{}, err
-		}
-		utcSession(&item.Session)
-		if hasCharger {
-			finishCharger(&c, status)
-			item.Charger = &c
-		}
-		return item, nil
-	})
+	list, err := pgx.CollectRows(rows, scanListRow)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
