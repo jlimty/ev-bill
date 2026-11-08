@@ -15,7 +15,6 @@ import (
 
 	"github.com/jlimty/ev-bill/internal/billing"
 	"github.com/jlimty/ev-bill/internal/live"
-	"github.com/jlimty/ev-bill/internal/mirror"
 	"github.com/jlimty/ev-bill/internal/reqid"
 	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
@@ -97,10 +96,6 @@ type feedLine struct {
 	Warn bool
 }
 
-type barSeg struct {
-	Class, Label, Times, Width string
-}
-
 type tableRow struct {
 	Label, Times, Energy, Rate, Cost string
 }
@@ -110,13 +105,20 @@ type barLegend struct {
 	Peak, OffPeak string
 }
 
+// detailPage is the detail page (VIEW-4). Status is the SES-4 status, for the
+// badge's CSS class, and StatusLabel its label (VIEW-2). Summary is the line
+// above the details; Energy and Total carry "est." for mirror sessions
+// (VIEW-1). Axis and Ticks are the tariff axis, empty when there are no
+// readings.
 type detailPage struct {
 	layoutData
-	Charger, SourceClass, SourceLabel string
-	Status, Started, Stopped          string
+	Charger, Subtitle                 string
+	SourceClass, SourceLabel          string
+	Status, StatusLabel               string
+	Summary, Started, Stopped         string
 	Location, Operator, Power, Notice string
-	Bar                               []barSeg
-	Legend                            barLegend
+	Axis                              []axisPiece
+	Ticks                             []axisTick
 	Rows                              []tableRow
 	Energy, Total                     string
 }
@@ -144,11 +146,6 @@ const (
 	// statusOccupied is a mirror session's label for SES-4's charging (VIEW-2).
 	statusOccupied = "occupied"
 )
-
-// estimateNotice explains the mirror's estimates (LIVE-4). The cap comes from
-// the mirror's own constant, so the page cannot disagree with the reconciler.
-var estimateNotice = "Mirrored chargers: energy and cost are estimates at rated power (DC capped at " +
-	FormatKW(mirror.DCMaxW) + `); "occupied" includes reserved connectors.`
 
 // tariffName names the tariff by its own rates, peak then off-peak: "62/48"
 // (VIEW-1). Every label that names the tariff uses it.
@@ -317,19 +314,22 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 	if v.Status != sessions.StatusCompleted {
 		stream = "view=session&id=" + url.QueryEscape(sess.ID)
 	}
+	est := sess.Source == sessions.SourceMirror
 	data := detailPage{
 		layoutData:  p.layout("Session "+sess.ChargerID, stream),
 		Charger:     sess.ChargerID,
 		SourceClass: sourceClass(sess.Source),
 		SourceLabel: sourceLabel(sess.Source),
 		Status:      v.Status,
+		StatusLabel: statusLabel(sess.Source, v.Status),
 		Started:     p.clock(sess.StartedAt, true),
-		Stopped:     "-",
-		Energy:      FormatWh(v.Bill.EnergyWh),
-		Total:       FormatCents(v.Bill.TotalCents),
-		Legend:      barLegend{Peak: peakLegend(p.Tariff), OffPeak: offPeakLegend(p.Tariff)},
+		Stopped:     "still " + statusLabel(sess.Source, sessions.StatusCharging),
+		Energy:      estimated(FormatWh(v.Bill.EnergyWh), est),
+		Total:       estimated(FormatCents(v.Bill.TotalCents), est),
 	}
 	data.Nav = navSessions
+	data.Subtitle = "Session · " + sourceSimulated
+	data.Summary = strings.Join([]string{data.Energy, data.Total, FormatDuration(v.LastReadingAt.Sub(sess.StartedAt)), data.StatusLabel}, " · ")
 	if sess.StoppedAt != nil {
 		data.Stopped = p.clock(*sess.StoppedAt, true)
 	}
@@ -341,24 +341,21 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 		if found {
 			data.Location, data.Operator, data.Power = charger.LocationName, charger.Operator, chargerPower(&charger)
 		}
-		data.Notice = estimateNotice
+		data.Subtitle = joinNonEmpty(" · ", "Session", data.Location)
+		data.Notice = listNotice
 	}
-	widths := BarWidths(v.Bill.Segments)
 	dated := lasts24h(v.Bill.Segments)
-	for i, s := range v.Bill.Segments {
-		label, class := windowLabel(s.Window)
-		times := p.segmentTimes(s, dated)
+	for _, s := range v.Bill.Segments {
+		label, _ := windowLabel(s.Window)
 		data.Rows = append(data.Rows, tableRow{
 			Label:  label,
-			Times:  times,
-			Energy: FormatWh(s.EnergyWh),
-			Rate:   FormatCents(s.RateCentsPerKWh) + "/kWh",
-			Cost:   FormatCents(s.CostCents),
+			Times:  p.segmentTimes(s, dated),
+			Energy: estimated(FormatWh(s.EnergyWh), est),
+			Rate:   FormatRate(s.RateCentsPerKWh),
+			Cost:   estimated(FormatCents(s.CostCents), est),
 		})
-		if i < len(widths) {
-			data.Bar = append(data.Bar, barSeg{Class: class, Label: label, Times: times, Width: widths[i]})
-		}
 	}
+	data.Axis, data.Ticks = p.axis(v.Bill.Segments)
 	return data, nil
 }
 

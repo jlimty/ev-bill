@@ -1,41 +1,38 @@
-{{define "detail_live"}}<div class="card">
+{{define "detail_live"}}<p class="summary" data-watch>{{.Summary}}</p>
+<div class="card">
 <dl>
-<dt>Charger</dt><dd>{{.Charger}} <span class="source {{.SourceClass}}">{{.SourceLabel}}</span></dd>
+<dt>Source</dt><dd><span class="source {{.SourceClass}}">{{.SourceLabel}}</span></dd>
 {{with .Location}}<dt>Location</dt><dd>{{.}}</dd>
 {{end}}{{with .Operator}}<dt>Operator</dt><dd>{{.}}</dd>
 {{end}}{{with .Power}}<dt>Power</dt><dd>{{.}}</dd>
-{{end}}<dt>Status</dt><dd><span class="badge {{.Status}}">{{.Status}}</span></dd>
+{{end}}<dt>Status</dt><dd data-watch><span class="badge {{.Status}}">{{.StatusLabel}}</span></dd>
 <dt>Started</dt><dd>{{.Started}}</dd>
 <dt>Stopped</dt><dd>{{.Stopped}}</dd>
 </dl>
 </div>
-{{if .Bar}}
+{{if .Axis}}
 <div class="card">
-<ol class="bar" aria-label="Tariff windows over the session">
-{{range .Bar}}<li class="seg {{.Class}}" style="width: {{.Width}}%">
-<div class="block" title="{{.Label}} {{.Times}}">{{.Label}}</div>
-<div class="times">{{.Times}}</div>
-</li>
+<ol class="axis" aria-label="Tariff windows over the session">
+{{range .Axis}}<li class="piece {{.Class}}" style="width:{{.Width}}%"{{if eq .Class "track"}} aria-hidden="true"{{else}} title="{{.Label}} {{.Times}}"{{end}}>{{if .Wide}}<span class="lbl">{{.Label}}</span>{{else}}<span class="vh">{{.Label}}</span>{{end}}</li>
 {{end}}</ol>
-<ul class="legend" aria-label="Bar legend">
-<li><span class="swatch peak"></span>{{.Legend.Peak}}</li>
-<li><span class="swatch offpeak"></span>{{.Legend.OffPeak}}</li>
-</ul>
+<ol class="axis-ticks" aria-label="Tariff boundaries">
+{{range .Ticks}}<li style="left:{{.Left}}%">{{.Label}}</li>
+{{end}}</ol>
 </div>
 <div class="card">
-<table>
-<thead><tr><th>Window</th><th>Time</th><th class="num">Energy</th><th class="num">Rate</th><th class="num">Cost</th></tr></thead>
+<table class="billing">
+<caption>Charges by tariff window</caption>
+<thead><tr><th scope="col">Window</th><th scope="col">Time</th><th scope="col" class="num">Energy</th><th scope="col" class="num">Rate</th><th scope="col" class="num">Cost</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr>
-<td>{{.Label}}</td><td>{{.Times}}</td><td class="num">{{.Energy}}</td><td class="num">{{.Rate}}</td><td class="num">{{.Cost}}</td>
+<th scope="row" class="label">{{.Label}}</th><td class="times">{{.Times}}</td><td class="num energy">{{.Energy}}</td><td class="num rate">{{.Rate}}</td><td class="num cost">{{.Cost}}</td>
 </tr>
 {{end}}</tbody>
-<tfoot><tr><td colspan="2">Total</td><td class="num">{{.Energy}}</td><td></td><td class="num">{{.Total}}</td></tr></tfoot>
+<tfoot><tr><th scope="row" colspan="2">Total</th><td class="num">{{.Energy}}</td><td></td><td class="num">{{.Total}}</td></tr></tfoot>
 </table>
 </div>
 {{else}}
 <div class="card">
-<p>No readings yet, so nothing is billed.</p>
-<p>Energy {{.Energy}} · Total <strong>{{.Total}}</strong></p>
+<p>No meter readings yet</p>
 </div>
 {{end}}{{end}}

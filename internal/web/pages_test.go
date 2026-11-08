@@ -150,10 +150,9 @@ func TestDetailPage_UI2_MockupSession(t *testing.T) {
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
 	wantContains(t, body, "CP-01", badge("completed"), "06 Nov 21:40", "07 Nov 00:15", "Peak", "Off-peak", "21:40", "23:00", "00:15",
-		"$5.95", "$4.03", "$9.98", "9.6 kWh", "8.4 kWh", "18.0 kWh", "62", "48",
-		`style="width: 51.6%"`, `style="width: 48.4%"`)
-	if strings.Count(body, `class="seg `) != 2 {
-		t.Errorf("want 2 bar segments, body %s", body)
+		"$5.95", "$4.03", "$9.98", "9.6 kWh", "8.4 kWh", "18.0 kWh", "62¢/kWh", "48¢/kWh")
+	if strings.Count(body, `<li class="piece peak"`) != 1 || strings.Count(body, `<li class="piece offpeak"`) != 1 {
+		t.Errorf("want one peak and one off-peak axis piece, body %s", body)
 	}
 }
 
@@ -169,7 +168,7 @@ func TestDetailPage_UI2_RefreshOnlyWhileNotCompleted(t *testing.T) {
 	}
 }
 
-// UI-2, SES-4: an active session without readings shows zeros and no bar.
+// UI-2, SES-4, VIEW-4: an active session without readings shows zeros and no axis.
 func TestDetailPage_ActiveWithoutReadings(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-01", sgt(0, 15, 7))
@@ -177,8 +176,8 @@ func TestDetailPage_ActiveWithoutReadings(t *testing.T) {
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
 	wantContains(t, body, "0.0 kWh", "$0.00", badge("charging"))
-	if strings.Contains(body, `class="bar"`) {
-		t.Errorf("no bar element expected without segments")
+	if strings.Contains(body, `class="axis`) {
+		t.Errorf("no axis expected without segments")
 	}
 }
 
@@ -297,7 +296,8 @@ func TestDetailPage_UI2_MockupSegmentsStayShort(t *testing.T) {
 	id := e.mockup("CP-01")
 	body := e.get("/sessions/" + id).Body.String()
 	wantContains(t, body, "21:40 – 23:00", "23:00 – 00:15")
-	if strings.Contains(body, "06 Nov 21:40 –") || strings.Contains(body, "06 Nov 23:00") {
+	// The axis ticks are dated (it spans two days); the rows are not.
+	if strings.Contains(body, "<td>06 Nov") || strings.Contains(body, "<td>07 Nov") {
 		t.Errorf("segment rows show a date: %s", body)
 	}
 }
@@ -351,10 +351,6 @@ const (
 	tariffText  = "Peak 07:00–23:00 · 62¢/kWh · Off-peak 23:00–07:00 · 48¢/kWh · Singapore time"
 	attribution = "Charger data: LTA DataMall EV Charging Points."
 )
-
-// noticeHTML is the estimate notice as it appears in the markup: html/template
-// writes its quotes as &#34;, which the browser shows as plain quotes.
-var noticeHTML = template.HTMLEscapeString(`Mirrored chargers: energy and cost are estimates at rated power (DC capped at 50 kW); "occupied" includes reserved connectors.`)
 
 // listNoticeHTML is the list page's notice (VIEW-1, LIVE-4) as it appears in
 // the markup.
@@ -588,12 +584,12 @@ func TestDetail_LIVE4_ChargerContext(t *testing.T) {
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
 	wantContains(t, body, "<dt>Location</dt><dd>Test Mall</dd>", "<dt>Operator</dt><dd>Testco</dd>",
-		"<dt>Power</dt><dd>7.4 kW AC</dd>", `<span class="source mirror">real charger</span>`, noticeHTML,
+		"<dt>Power</dt><dd>7.4 kW AC</dd>", `<span class="source mirror">real charger</span>`, listNoticeHTML,
 		tariffText, attribution, liveScript, `data-stream="view=session&amp;id=`+mirror+`"`)
 
 	body = e.get("/sessions/" + sim).Body.String()
 	wantContains(t, body, `<span class="source simulated">simulated</span>`)
-	for _, absent := range []string{"<dt>Location</dt>", "<dt>Power</dt>", noticeHTML} {
+	for _, absent := range []string{"<dt>Location</dt>", "<dt>Power</dt>", listNoticeHTML} {
 		if strings.Contains(body, absent) {
 			t.Errorf("LIVE-4: simulated session shows %q", absent)
 		}
@@ -635,21 +631,16 @@ func TestPages_LIVE4_ChargerDetailsOnlyForMirror(t *testing.T) {
 	}
 }
 
-// LIVE-4: the detail page's bar has a legend: a swatch per tariff window with
-// its hours and rate, built from the tariff's values like the header.
-func TestDetail_LIVE4_BarLegend(t *testing.T) {
+// VIEW-4: the bar legend is gone; the axis carries its own boundary labels.
+func TestDetail_VIEW4_NoLegend(t *testing.T) {
 	e := newEnv(t)
-	id := e.mockup("CP-01")
-	wantContains(t, e.get("/sessions/"+id).Body.String(),
-		`<ul class="legend" aria-label="Bar legend">`,
-		`<li><span class="swatch peak"></span>Peak 07:00–23:00 · 62¢/kWh</li>`,
-		`<li><span class="swatch offpeak"></span>Off-peak 23:00–07:00 · 48¢/kWh</li>`)
-
-	// No bar, no legend.
-	active := e.start("CP-02", sgt(0, 15, 7))
-	if body := e.get("/sessions/" + active).Body.String(); strings.Contains(body, `class="legend"`) {
-		t.Errorf("LIVE-4: legend shown without a bar")
+	body := e.get("/sessions/" + e.mockup("CP-01")).Body.String()
+	for _, absent := range []string{`class="legend"`, `class="bar"`, `class="swatch`} {
+		if strings.Contains(body, absent) {
+			t.Errorf("VIEW-4: detail page still shows %q", absent)
+		}
 	}
+	wantContains(t, body, `<ol class="axis"`, `<ol class="axis-ticks"`, ">06 Nov 07:00<", ">06 Nov 23:00<", ">07 Nov 07:00<")
 }
 
 // navOf returns the text of the header link marked aria-current, or "".
@@ -1183,5 +1174,99 @@ func TestList_NAV4_EnergyPagingRoundTrip(t *testing.T) {
 	// Rows come in energy order: the 6 kWh sessions are all on page 2.
 	if !strings.Contains(page2, "6.0 kWh") || strings.Contains(page1, "<td class=\"num energy\" data-watch>6.0 kWh</td>") {
 		t.Errorf("NAV-3: energy order wrong across pages")
+	}
+}
+
+// activeMirror seeds a mirror session at a peak-hour time and moves the clock
+// to 2 minutes after its last reading, so its status is "occupied".
+func (e *env) activeMirror() string {
+	e.t.Helper()
+	e.charger("SG-AC-1", "Test Mall", "Testco", "AC", 7_400, false, sgt(12, 0, 6))
+	id := e.mirrorSession("SG-AC-1", sgt(12, 0, 6), sgt(12, 10, 6), 8333)
+	e.p.Now = func() time.Time { return sgt(12, 12, 6) }
+	return id
+}
+
+// VIEW-4: the h1 is the charger ID; the subtitle names the location (mirror)
+// or "simulated"; the details list has no Charger row.
+func TestDetail_VIEW4_Header(t *testing.T) {
+	e := newEnv(t)
+	mirror := e.get("/sessions/" + e.activeMirror()).Body.String()
+	wantContains(t, mirror, "<h1>SG-AC-1</h1>", `<p class="sub">Session · Test Mall</p>`)
+	api := e.get("/sessions/" + e.start("CP-SIM", sgt(12, 0, 6))).Body.String()
+	wantContains(t, api, "<h1>CP-SIM</h1>", `<p class="sub">Session · simulated</p>`)
+	for name, body := range map[string]string{"mirror": mirror, "api": api} {
+		if strings.Contains(body, "<dt>Charger</dt>") || strings.Contains(body, "Session on") {
+			t.Errorf("VIEW-4: %s page keeps the old charger row or heading", name)
+		}
+	}
+}
+
+// VIEW-4, VIEW-1, VIEW-2: the summary line comes first and carries est. for
+// mirror figures; Stopped reads "still occupied" or "still charging".
+func TestDetail_VIEW4_Summary(t *testing.T) {
+	e := newEnv(t)
+	body := e.get("/sessions/" + e.activeMirror()).Body.String()
+	wantContains(t, body, `<p class="summary" data-watch>8.3 kWh est. · $5.17 est. · 10 min · occupied</p>`,
+		"<dt>Stopped</dt><dd>still occupied</dd>")
+	if strings.Index(body, `class="summary"`) > strings.Index(body, "<dl>") {
+		t.Errorf("VIEW-4: summary does not come before the details")
+	}
+
+	api := newEnv(t)
+	active := api.start("CP-A", sgt(12, 0, 6))
+	api.reading(active, sgt(12, 10, 6), 8333)
+	api.p.Now = func() time.Time { return sgt(12, 12, 6) }
+	wantContains(t, api.get("/sessions/"+active).Body.String(),
+		`<p class="summary" data-watch>8.3 kWh · $5.17 · 10 min · charging</p>`, "<dt>Stopped</dt><dd>still charging</dd>")
+
+	done := api.get("/sessions/" + api.mockup("CP-B")).Body.String()
+	wantContains(t, done, `<p class="summary" data-watch>18.0 kWh · $9.98 · 2 h 35 min · completed</p>`, "<dt>Stopped</dt><dd>07 Nov 00:15</dd>")
+	if strings.Contains(done, "still ") || strings.Contains(done, " est.") {
+		t.Errorf("VIEW-4: stopped api session shows still or est.")
+	}
+}
+
+// VIEW-4: a session with no readings has no axis and says so.
+func TestDetail_VIEW4_NoReadings(t *testing.T) {
+	e := newEnv(t)
+	body := e.get("/sessions/" + e.start("CP-01", sgt(0, 15, 7))).Body.String()
+	wantContains(t, body, "No meter readings yet")
+	for _, absent := range []string{`class="axis`, "<table", "No readings yet"} {
+		if strings.Contains(body, absent) {
+			t.Errorf("VIEW-4: no-readings page shows %q", absent)
+		}
+	}
+}
+
+// VIEW-1, VIEW-4: Rate reads 62¢/kWh and 48¢/kWh, mirror figures carry est.,
+// the table has a caption and scope on every th, and the live parts carry
+// data-watch.
+func TestDetail_VIEW1_RatesAndTable(t *testing.T) {
+	e := newEnv(t)
+	e.charger("SG-AC-1", "Test Mall", "Testco", "AC", 7_400, false, sgt(21, 0, 6))
+	id := e.mirrorSession("SG-AC-1", sgt(22, 30, 6), sgt(23, 20, 6), 5000)
+	e.p.Now = func() time.Time { return sgt(23, 25, 6) }
+	body := e.get("/sessions/" + id).Body.String()
+	wantContains(t, body, `<td class="num rate">62¢/kWh</td>`, `<td class="num rate">48¢/kWh</td>`,
+		`<caption>`, `<th scope="col">Window</th>`, `<th scope="col" class="num">Rate</th>`, `<th scope="row" colspan="2">Total</th>`,
+		`<dd data-watch><span class="badge charging">occupied</span></dd>`, `<p class="summary" data-watch>`)
+	// Both rows and the total carry est.
+	if n := strings.Count(body, "kWh est.</td>"); n != 3 {
+		t.Errorf("VIEW-1: %d energy cells with est., want 3 (two rows and the total)", n)
+	}
+	if n := strings.Count(body, " est.</td>"); n != 6 {
+		t.Errorf("VIEW-1: %d est. cells, want 6", n)
+	}
+	for _, th := range regexp.MustCompile(`<th\b[^>]*>`).FindAllString(body, -1) {
+		if !strings.Contains(th, "scope=") {
+			t.Errorf("VIEW-4: %s has no scope", th)
+		}
+	}
+
+	// A simulated session has no est. anywhere in its table (VIEW-1).
+	sim := newEnv(t)
+	if body := sim.get("/sessions/" + sim.mockup("CP-X")).Body.String(); strings.Contains(body, " est.") {
+		t.Errorf("VIEW-1: simulated detail page shows est.")
 	}
 }

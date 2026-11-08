@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-
-	"github.com/jlimty/ev-bill/internal/billing"
 )
 
 // FormatCents formats integer cents as dollars with thousands separators,
@@ -38,25 +36,26 @@ func FormatWh(wh int64) string {
 	return fmt.Sprintf("%s.%d kWh", groupThousands(tenths/10), tenths%10)
 }
 
-// BarWidths returns each segment's share of the total duration as a percentage
-// with one decimal, rounded half-up and independently per segment (UI-2). It
-// returns an empty slice when there are no segments or the total is zero.
-// Durations are capped at 48 h by the session rules, so the arithmetic fits int64.
-func BarWidths(segs []billing.Segment) []string {
-	var total int64
-	for _, s := range segs {
-		total += int64(s.End.Sub(s.Start))
+// FormatRate formats a rate in cents per kWh (VIEW-1): 62 -> "62¢/kWh".
+func FormatRate(centsPerKWh int64) string {
+	return fmt.Sprintf("%d¢/kWh", centsPerKWh)
+}
+
+// FormatDuration formats a span in whole minutes and hours (VIEW-4): under a
+// minute (or negative) "0 min", then "10 min", "2 h 5 min", and "3 h" when
+// the minutes are zero.
+func FormatDuration(d time.Duration) string {
+	mins := int64(d / time.Minute)
+	switch {
+	case mins <= 0:
+		return "0 min"
+	case mins < 60:
+		return fmt.Sprintf("%d min", mins)
+	case mins%60 == 0:
+		return fmt.Sprintf("%d h", mins/60)
+	default:
+		return fmt.Sprintf("%d h %d min", mins/60, mins%60)
 	}
-	if total <= 0 {
-		return []string{}
-	}
-	widths := make([]string, len(segs))
-	for i, s := range segs {
-		d := int64(s.End.Sub(s.Start))
-		tenths := (d*2000 + total) / (2 * total) // round half-up of d*1000/total
-		widths[i] = fmt.Sprintf("%d.%d", tenths/10, tenths%10)
-	}
-	return widths
 }
 
 // FormatKW formats watts as kW, rounded half-up to one decimal, with the
