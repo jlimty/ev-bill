@@ -128,22 +128,22 @@ Sleep is still handled correctly (MIR-5), because deploys, restarts and feed out
 
 - **LIVE-1 Event stream.** `GET /events` is an SSE stream:
   - It's mounted outside the 8 s request deadline. Today `withDeadline` wraps the whole mux in `internal/server/server.go`, so the routing has to be split: `/events` must not sit behind that wrapper. Each write sets its own deadline with `http.ResponseController`, so the server's 10 s `WriteTimeout` doesn't cut it off.
-  - It serves three views: `list`, `session` (with an `id`), and `locations`, the Locations page's live section (LOC-7).
+  - It serves three views: `list` (with the list page's `site`, `sort` and `dir`, NAV-5 in the home-and-sessions design), `session` (with an `id`), and `locations`, the Locations page's live section (LOC-7).
   - It sends a heartbeat comment every 25 s.
   - It caps open streams at 100 and returns 503 above that.
   - On shutdown, the hub ends every stream so `http.Server.Shutdown` can finish.
 - **LIVE-2 Hub.** One broadcaster goroutine fans "sessions changed" out to subscribers.
   - Each subscriber has a buffer of 1 that coalesces signals: if a signal is already waiting, the new one is dropped, so a slow browser can never block the reconciler.
   - The reconciler publishes after each cycle that changed something.
-- **LIVE-3 What's pushed.** On each signal, the stream sends the re-rendered list-table body (or the detail page's live section, or the Locations page's live section), built with `html/template` so it's escaped. One same-origin script (`/static/live.js`) swaps it into place.
+- **LIVE-3 What's pushed.** On each signal, the stream sends the re-rendered list-table body (or the detail page's live section, or the Locations page's live section), built with `html/template` so it's escaped. One same-origin script (`/static/live.js`) replaces the region with it when it differs from what is shown, restores focus by item key and keeps the viewport in place, and flashes only items whose watched values changed (VIEW-6 in the home-and-sessions design).
   - The CSP becomes `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`.
-  - Without JS, a `<noscript>` meta refresh keeps today's 3 s behaviour.
+  - Without JS, a `<noscript>` meta refresh reloads the page every 30 s (VIEW-6).
 - **LIVE-4 Page content.**
   - **Tariff header:** peak and off-peak windows and rates.
-  - **Legend** for the bar.
+  - **Boundary labels** on the bar's time axis (VIEW-4), which replace the bar's legend.
   - **Feed status line:** "Live from LTA DataMall · last update 13:45 (2 min ago)". It turns into a warning when the last good poll is more than 15 min old, and says "Mirror off" when no key is configured.
-  - **Per row:** location name, operator, kW and AC/DC, and a `mirror` or `simulated` label.
-  - **Estimate notice:** "energy and cost for mirrored chargers are estimates at rated power; occupied includes reserved".
+  - **Per row:** location name, operator, kW and AC/DC under the charger ID (VIEW-3), and a "real charger" or "simulated" source label (VIEW-2).
+  - **Estimate labels:** VIEW-1's "est." labels replace the estimate notice, but its "occupied includes reserved" clause stays in the list's notice.
   - **Totals** across the listed sessions.
   - **Relative times.**
   - **Attribution** to LTA DataMall in the footer.

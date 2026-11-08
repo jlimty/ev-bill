@@ -6,7 +6,7 @@ Extends `2026-11-08-live-mirror-design.md` and `2026-11-07-ev-billing-design.md`
 
 The sessions list shows individual charges. It doesn't answer the question a viewer asks next: **are these public chargers actually used?**
 
-A new `/locations` page answers it for each watched site:
+A new page, served at `/` (NAV-1 in the home-and-sessions design), answers it for each watched site:
 - **utilization**, measured from LTA's occupancy;
 - **when in the day** the chargers are busy, against our peak and off-peak windows;
 - **what is happening right now**, connector by connector.
@@ -76,9 +76,10 @@ The audience is engineers first, with numbers framed so that someone who runs ch
   - **Observed time** for a site = its sample count × 5 min, shown in whole hours. Polls can skip a feed update, so this is conservative.
   - **A site is "sufficient"** once it has at least 288 samples (24 h observed).
   - **The page states its window:** "last 14 days" once the earliest sample among the sites shown is 14 days old, otherwise "since 8 Nov · 31 h observed", using that earliest sample and the largest site's observed hours.
-  - **Order:** sufficient sites sort by utilization ascending (least used first). Sites that aren't yet sufficient follow in a fixed order (by name) with a "collecting data · N h" note. Sites showing "n/a" sort last.
+  - **Order:** sufficient sites sort by utilization ascending (least used first). Sites that aren't yet sufficient follow in a fixed order (by name) with a "collecting data · N h" note, shown only as VIEW-5 (home-and-sessions design) says. Sites showing "n/a" sort last.
   - **Headline:** the headline sentence uses only sufficient sites, and appears once at least one site is sufficient. Before that it reads "Collecting data · N h observed so far".
 - **LOC-5 Live connector state.**
+  - **Site name:** follows VIEW-5's naming rule (home-and-sessions design): the location name held by the most connectors at the postal code.
   - **Which sites get a card:** postal codes present in the newest observation in `chargers` (the current scope). A site removed from `MIRROR_POSTAL_CODES` drops off the page. Its samples age out after 14 days and are never shown.
   - Each location shows one cell per connector currently in scope, taken from the newest observation in `chargers`.
   - **Not live:** if the mirror is off, the feed line is in its warning state (no good poll for more than 15 min), or no poll has succeeded since the server started, the grid still shows the last known states. But the cells are drawn muted, and the count reads "as of 13:20" rather than as current. When that observation isn't from today (Singapore time), the date is included: "as of 06 Nov 2026 23:59".
@@ -97,12 +98,12 @@ The audience is engineers first, with numbers framed so that someone who runs ch
     - An unknown type, or an empty or unparseable price, leaves that session out of the value, and the page notes "price n/a for N sessions".
   - The label reads "est. value at today's posted price", because the current price is applied to the whole window.
 - **LOC-7 Page.**
-  - `GET /locations` is public, linked from the header next to the sessions list.
+  - `GET /` serves the page (NAV-1 in the home-and-sessions design), and `/locations` answers 301 to `/`. It is public, and is the first link in the header nav.
   - It updates live through the existing `/events` stream with a new view `locations`, sharing renders through the render cache, on every mirror change and the 30 s refresh.
   - Without JS, the existing `<noscript>` refresh applies.
-  - With the mirror off and no samples, it shows an empty state: "Live mirror off · no location data yet".
+  - With the mirror off and no samples, it shows an empty state: "Live mirror off · no location data yet". Every empty state links to `/sessions`.
   - `live.js` gains a listener for the `locations` event.
-  - Without JS, the 3 s `<noscript>` refresh re-runs the aggregation on each load. This is accepted at this scale.
+  - Without JS, the 30 s `<noscript>` refresh re-runs the aggregation on each load. This is accepted at this scale.
 
 ## UI brief (impeccable, Operate mode, inside the existing visual system)
 
@@ -117,7 +118,7 @@ The audience is engineers first, with numbers framed so that someone who runs ch
      - utilization as the card's largest number, labelled "observed";
      - the 24-hour strip with hour ticks at 00, 06, 12, 18 and 23;
      - the facts line: sessions · est. energy · est. value at today's posted price.
-  4. A legend covering the cell states and the tariff colours, plus the estimate notice.
+  4. The legends sit as VIEW-5 says: a compact cell legend above the first card and the tariff swatches beside each strip's caption. The estimate notice follows the cards.
 - **Focal moment:** the gap between a card's utilization number and its mostly empty grid.
 - **Visual system:** inherit the `layout.html` tokens: `--peak`/`--off` for tariff bars, existing card, badge and type scale, with no new brand colours.
   - Busy cells use solid ink; free cells use an outlined empty square; out-of-service cells use a hatched pattern (CSS gradient), with a 44 px tap target on phones via the cell row, not the cell.

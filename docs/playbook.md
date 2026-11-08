@@ -53,9 +53,9 @@ With a local server on port 18092 (Apple M5, Go 1.27.3, Postgres 18.4, a pool of
 - **Occupancy samples.** Every applied poll writes one row per watched site to `occupancy_samples` (about 860 rows a day for three sites), which the Locations page sums. The hourly retention job deletes samples older than 14 days, together with completed mirror sessions; the page also filters to the last 14 days itself, so it stays correct if retention is not running.
 - **`DATAMALL_BASE_URL`.** It is validated at startup even when the mirror is off, so a malformed value stops the server from starting.
 - **Post-deploy smoke check.** After a deploy:
-  1. Open https://ev-billing.onrender.com/.
-  2. The feed line shows a recent update, within one poll (5 minutes) of the deploy finishing.
-  3. A row changes without a reload within 10 minutes, which shows Render's proxy is not buffering `/events`.
+  1. Open https://ev-billing.onrender.com/ (Locations) and https://ev-billing.onrender.com/sessions (the sessions list).
+  2. On either page, the feed line shows a recent update, within one poll (5 minutes) of the deploy finishing.
+  3. A connector cell on Locations or a row on the sessions list changes without a reload within 10 minutes, which shows Render's proxy is not buffering `/events`. No "Reconnecting…" or "Updates paused" shows under the tariff line.
   4. `GET /healthz` returns 200.
 
   Record the result here, with the date.

@@ -65,8 +65,8 @@ A small Go service that bills EV charging sessions, delivered through spec-first
 - **API-3** `api/openapi.yaml` is the contract, written before the handlers. Tests validate real responses against it. It gains `source` (`api` or `mirror`) on sessions and the `mirror_session` error code (MIR-7 in the live-mirror design).
 
 ## Status page
-- **UI-1** `/` lists the newest 50 sessions (charger, start, status badge, energy, cost) and updates live by push (LIVE-1..3 in the live-mirror design); the 3 s meta refresh stays as the no-JS fallback.
-- **UI-2** `/sessions/{id}` shows a horizontal bar of peak/off-peak segments with boundary times, plus a segment table (window, energy, rate, cost) and the total.
+- **UI-1** `/sessions` lists the sessions 50 to a page, newest first (charger, start, status badge, energy, cost), and updates live by push (LIVE-1..3 in the live-mirror design); the 30 s meta refresh (VIEW-6) stays as the no-JS fallback. It moved from `/`, which now serves the Locations page, and gained the site filter, sort and paging of NAV-2..5 and the labels and layout of VIEW-1..3 (all in the home-and-sessions design).
+- **UI-2** `/sessions/{id}` shows a horizontal bar of peak/off-peak segments with boundary times, plus a segment table (window, energy, rate, cost) and the total. It gains VIEW-4 (home-and-sessions design): the charger ID as the h1, a summary line, and the bar on a time axis with labelled tariff boundaries.
 - Built with Go's `html/template` and a little CSS. No JavaScript framework.
 - The Content-Security-Policy is `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`; `script-src` and `connect-src` allow the live push (LIVE-3).
 

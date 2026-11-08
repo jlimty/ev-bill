@@ -80,7 +80,7 @@ flowchart TB
 
 ### How the live mirror flows
 
-At startup and then every 5 minutes, `datamall` fetches the EV charging batch file (a link request with the `AccountKey` header, then a download of the file without it). `mirror` keeps the connectors at the watched postal codes, estimates their power, and the reconciler compares the occupied ones with the open mirror sessions in the database, starting, extending and stopping sessions through `store`. In the same transaction as the charger rows, each applied poll also writes one occupancy sample per site (busy, free and out-of-service counts), which the Locations page aggregates. When a cycle changes something it publishes to the `live` hub, and so does every API write; the hub also receives a signal every 30 s so relative times stay current. Each open `/events` stream (kept open with a heartbeat every 25 s) re-renders its view (the list, one session, or the locations) and sends it; `/static/live.js` swaps it into the page. The render cache renders each view once per change and shares the bytes across every stream on that view, waits at least 2 s between renders per stream, and runs at most 2 renders at once, so open pages cannot starve the database pool.
+At startup and then every 5 minutes, `datamall` fetches the EV charging batch file (a link request with the `AccountKey` header, then a download of the file without it). `mirror` keeps the connectors at the watched postal codes, estimates their power, and the reconciler compares the occupied ones with the open mirror sessions in the database, starting, extending and stopping sessions through `store`. In the same transaction as the charger rows, each applied poll also writes one occupancy sample per site (busy, free and out-of-service counts), which the Locations page aggregates. When a cycle changes something it publishes to the `live` hub, and so does every API write; the hub also receives a signal every 30 s so relative times stay current. Each open `/events` stream (kept open with a heartbeat every 25 s) re-renders its view (the list, one session, or the locations) and sends it; `/static/live.js` replaces the page's live region with it when it differs from what is shown, puts focus back by item key, keeps the viewport on the same item, flashes only items whose watched values changed, and shows when the stream is reconnecting or paused. The render cache renders each view once per change and shares the bytes across every stream on that view, waits at least 2 s between renders per stream, and runs at most 2 renders at once, so open pages cannot starve the database pool.
 
 ### How a request flows
 
@@ -169,7 +169,7 @@ The contract is [`api/openapi.yaml`](api/openapi.yaml); handler tests validate r
 | GET | `/api/sessions` | none | 200 (newest 50) |
 | GET | `/healthz` | none | 200, or 503 if the database ping fails within 2 s |
 
-Status pages: `/` (Locations, see [Locations](#locations)), `/sessions` (newest 50) and `/sessions/{id}` (segment bar and table). `/locations` redirects to `/`. They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 30 s.
+Status pages: `/` (Locations, see [Locations](#locations)), `/sessions` (filtered by site, sorted and paged) and `/sessions/{id}` (segment bar and table). `/locations` redirects to `/`. They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 30 s.
 
 ## Live mirror
 
