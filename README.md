@@ -2,50 +2,67 @@
 
 A small Go service that bills EV charging sessions on a Singapore peak/off-peak tariff: 62 cents per kWh from 07:00 to 23:00 and 48 cents per kWh from 23:00 to 07:00 (`Asia/Singapore`). Chargers report meter readings over a JSON API; a server-rendered status page lists the newest sessions and shows each session's cost split by tariff window. A session that crosses a tariff boundary is split in proportion to time.
 
-Live: https://ev-billing.onrender.com (free tier, see [Deployment](#deployment)).
+The server also mirrors real Singapore chargers: every 5 minutes it reads the occupancy of the watched connectors from LTA DataMall and bills each occupancy as a `mirror` session, with energy estimated at rated power ([Live mirror](#live-mirror)). A Locations page shows how busy each watched site actually is, from observed occupancy, by hour of day ([Locations](#locations)). Every page updates live over Server-Sent Events.
+
+Live: https://ev-billing.onrender.com and https://ev-billing.onrender.com/locations (free tier, see [Deployment](#deployment)).
 
 ## Architecture
 
 ```mermaid
 flowchart TB
     SIM["Chargers<br/>(cmd/simulator)"]
-    BROWSER["Browser"]
+    BROWSER["Browser<br/>/, /sessions/{id}, /locations"]
     LTA["LTA DataMall<br/>EV charging feed"]
 
-    subgraph RENDER["Render web service (cmd/server)"]
+    subgraph RENDER["Render web service (cmd/server, one errgroup)"]
         direction TB
-        SRV["server<br/>RequestLogger, /healthz"]
+        SRV["server<br/>RequestLogger, 8 s deadline, /healthz"]
         API["api<br/>JSON, X-API-Key on POST"]
-        WEB["web<br/>html/template pages"]
+        WEB["web<br/>html/template pages, /events (SSE)"]
+        RC["render cache<br/>one render per view per change"]
+        LOC["locations<br/>utilization, price, ordering (pure)"]
         SES["sessions<br/>rules, status, view"]
         BIL["billing<br/>tariff split, pricing (pure)"]
         STO["store<br/>pgx, row-locked writes, goose"]
+
+        subgraph MIRROR["Live mirror (off without LTA_ACCOUNT_KEY)"]
+            direction TB
+            DM["datamall<br/>link + file download, parser"]
+            POLL["poller<br/>at startup, then every 5 min"]
+            REC["reconciler<br/>plan, mirror sessions, samples"]
+            RET["retention<br/>hourly, 14 days"]
+            POLL --> DM
+            POLL --> REC
+        end
+
+        HUB["live hub<br/>fan-out of 'changed'"]
+        TICK["30 s refresh ticker"]
+
         SRV --> API
         SRV --> WEB
         API --> SES
-        WEB --> SES
+        WEB --> RC
+        RC --> SES
+        RC --> LOC
         SES --> BIL
-        API -->|"reads/writes"| STO
+        API -->|"writes"| STO
+        API -->|"changed"| HUB
         SRV -->|"healthz ping"| STO
-        WEB -->|"reads"| STO
+        RC -->|"reads"| STO
         STO -->|"rules run in locked tx"| SES
-        POLL["poller<br/>every 5 min, off without LTA_ACCOUNT_KEY"]
-        REC["reconciler<br/>mirror sessions"]
-        HUB["hub<br/>fan-out, /events (SSE)"]
-        TICK["30 s refresh ticker"]
-        POLL --> REC
         REC --> SES
-        REC -->|"writes"| STO
+        REC -->|"sessions, chargers + samples in one tx"| STO
+        RET -->|"deletes old mirror sessions, samples"| STO
         REC -->|"changed"| HUB
         TICK --> HUB
-        HUB -->|"re-rendered tables"| WEB
+        HUB -->|"re-render list, session, locations"| WEB
     end
 
-    DB[("Render Postgres 18")]
+    DB[("Render Postgres 18<br/>sessions, meter_readings,<br/>chargers, occupancy_samples")]
 
     SIM -->|"HTTPS JSON"| SRV
-    BROWSER -->|"HTTPS, EventSource /events"| SRV
-    POLL -->|"HTTPS, AccountKey"| LTA
+    BROWSER -->|"HTTPS pages, EventSource /events"| SRV
+    DM -->|"HTTPS, AccountKey"| LTA
     STO --> DB
 ```
 
@@ -54,7 +71,7 @@ Delivery path:
 ```mermaid
 flowchart TB
     PR["Pull request"] --> CI["GitHub Actions checks<br/>lint, test, vuln, secrets, sonar"]
-    PR -.-> MUT["mutation report<br/>(not a gate)"]
+    PR -.-> REP["report-only jobs (not gates)<br/>e2e browser test, mutation, sbom (Trivy + CycloneDX)"]
     CI --> BP["Branch protection"]
     BP --> MAIN["Merge to main"]
     MAIN --> RCI["Checks pass on main"]
@@ -63,7 +80,7 @@ flowchart TB
 
 ### How the live mirror flows
 
-At startup and then every 5 minutes, `datamall` fetches the EV charging batch file (a link request with the `AccountKey` header, then a download of the file without it). `mirror` keeps the connectors at the watched postal codes, estimates their power, and the reconciler compares the occupied ones with the open mirror sessions in the database, starting, extending and stopping sessions through `store`. When a cycle changes something it publishes to the `live` hub; the hub also receives a signal every 30 s so relative times stay current. Each open `/events` stream (kept open with a heartbeat every 25 s) re-renders the list (or detail) fragment and sends it; `/static/live.js` swaps it into the page.
+At startup and then every 5 minutes, `datamall` fetches the EV charging batch file (a link request with the `AccountKey` header, then a download of the file without it). `mirror` keeps the connectors at the watched postal codes, estimates their power, and the reconciler compares the occupied ones with the open mirror sessions in the database, starting, extending and stopping sessions through `store`. In the same transaction as the charger rows, each applied poll also writes one occupancy sample per site (busy, free and out-of-service counts), which the Locations page aggregates. When a cycle changes something it publishes to the `live` hub, and so does every API write; the hub also receives a signal every 30 s so relative times stay current. Each open `/events` stream (kept open with a heartbeat every 25 s) re-renders its view (the list, one session, or the locations) and sends it; `/static/live.js` swaps it into the page. The render cache renders each view once per change and shares the bytes across every stream on that view, waits at least 2 s between renders per stream, and runs at most 2 renders at once, so open pages cannot starve the database pool.
 
 ### How a request flows
 
@@ -81,7 +98,8 @@ At startup and then every 5 minutes, `datamall` fetches the EV charging batch fi
 | `internal/api` | JSON handlers and `X-API-Key` middleware |
 | `internal/web` | Status pages rendered with `html/template`, the `/events` stream and `/static/live.js` |
 | `internal/datamall` | DataMall client (link, then file download) and feed parser; integer watts, no floats |
-| `internal/mirror` | Poller, planner, reconciler and retention job for the live mirror |
+| `internal/mirror` | Poller, planner, reconciler, occupancy samples and retention job for the live mirror |
+| `internal/locations` | Pure utilization, price parsing, estimated value, site ordering and headline for the Locations page; integers only |
 | `internal/live` | Hub that fans "changed" signals out to streams, the 30 s ticker, and the feed status |
 | `internal/server` | Top-level handler: request logging, `/healthz`, graceful serve |
 | `internal/reqid` | Carries the request ID through the request context |
@@ -219,6 +237,8 @@ The window is the last 14 days, or since the first sample when that is later ("S
 - **secrets**: `gitleaks` over git history and the working tree.
 - **sonar**: SonarQube Cloud quality gate (CI only).
 - **mutation**: `gremlins` on `internal/billing`; a report, not a blocker (`make mutation`).
+- **e2e**: Playwright browser test of the status and Locations pages (live updates without a reload, zero console errors or CSP violations); CI only, a report, not a blocker.
+- **sbom**: Trivy writes a CycloneDX SBOM (kept as a CI artifact) and scans `go.mod`/`go.sum`; CI only, a report, not a blocker. The gitleaks and Trivy release downloads are cached and checksum-verified.
 
 ## Deployment
 
@@ -245,6 +265,8 @@ Free-tier limits (Render's free-tier terms as of November 2026):
 - [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md): rule IDs LOC-1..7 (occupancy samples, utilization, hourly profile, data sufficiency, live connector state, sessions and estimated value, the page)
 - [Live mirror spec](docs/superpowers/specs/2026-11-08-live-mirror-design.md): rule IDs MIR-1..12 (poller, scope, observation time, energy estimate, gaps, reconciliation, coexistence with API sessions, charger details, retention, config, lifecycle, occupancies past 48 h) and LIVE-1..4 (event stream, hub, pushed content, page content)
 - [Live mirror plan](docs/superpowers/plans/2026-11-08-live-mirror.md)
+- [Locations plan](docs/superpowers/plans/2026-11-08-locations.md)
+- [PRODUCT.md](PRODUCT.md): who the pages are for and the product principles
 - [AGENTS.md](AGENTS.md): constraints and rules for coding agents
 - [Delivery playbook](docs/playbook.md)
 - [AI review log](docs/ai-review-log.md)
