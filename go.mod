@@ -10,17 +10,20 @@ tool (
 require (
 	github.com/getkin/kin-openapi v0.153.0
 	github.com/jackc/pgx/v5 v5.12.0
+	github.com/mxschmitt/playwright-go v0.6201.1
 	github.com/pressly/goose/v3 v3.29.0
 )
 
 require (
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
 	github.com/bluekeyes/go-gitdiff v0.8.1 // indirect
+	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-gremlins/gremlins v0.6.0 // indirect
 	github.com/go-openapi/jsonpointer v0.22.5 // indirect
 	github.com/go-openapi/swag/jsonname v0.25.5 // indirect
+	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/hako/durafmt v0.0.0-20210608085754-5c1018a4e16b // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
