@@ -8,3 +8,22 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # The CI scanners, each pinned in its own module (see the Makefile's
+  # secrets target and the sbom job in ci.yml). Only the tool itself is
+  # updated, so there is one PR per release and none for its dependencies.
+  # Go lists a module named by a `tool` directive as `// indirect`, so
+  # dependency-type "all" is needed for Dependabot to update it.
+  - package-ecosystem: gomod
+    directory: /tools/gitleaks
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: github.com/zricethezav/gitleaks/v8
+        dependency-type: all
+  - package-ecosystem: gomod
+    directory: /tools/trivy
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: github.com/aquasecurity/trivy
+        dependency-type: all
