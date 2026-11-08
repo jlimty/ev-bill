@@ -1,0 +1,27 @@
+# Render Blueprint: one free Go web service and one free Postgres database.
+# Render deploys only after every CI check on main passes (autoDeployTrigger).
+# region and postgresMajorVersion cannot be changed after creation.
+services:
+  - type: web
+    name: ev-billing
+    runtime: go
+    plan: free
+    region: singapore
+    buildCommand: go build -o bin/server ./cmd/server
+    startCommand: ./bin/server
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ev-billing-db
+          property: connectionString
+      # Set in the Render dashboard when the Blueprint is created; never committed.
+      - key: API_KEY
+        sync: false
+databases:
+  - name: ev-billing-db
+    plan: free
+    region: singapore
+    # Same major version as local development and CI (Postgres 18).
+    postgresMajorVersion: "18"
