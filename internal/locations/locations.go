@@ -185,3 +185,31 @@ func Headline(sites []Site) (text string, pooledBP int64, ok bool) {
 	return fmt.Sprintf("Across %d sites, chargers were busy %d%% of the observed time · least used: %s, %d%%",
 		len(ranked), pct, least.Name, PercentFromBP(least.bp())), pooledBP, true
 }
+
+// SiteNames picks a site's name from the location names of its connectors: the
+// most frequent one, ties going to the name that sorts first (VIEW-5). also is
+// the other distinct names, sorted; it is empty, not nil, when there are none.
+func SiteNames(names []string) (name string, also []string) {
+	count := make(map[string]int, len(names))
+	for _, n := range names {
+		count[n]++
+	}
+	distinct := make([]string, 0, len(count))
+	for n := range count {
+		distinct = append(distinct, n)
+	}
+	sort.Strings(distinct)
+	also = []string{}
+	for i, n := range distinct {
+		if i == 0 || count[n] > count[name] {
+			if i > 0 {
+				also = append(also, name)
+			}
+			name = n
+			continue
+		}
+		also = append(also, n)
+	}
+	sort.Strings(also)
+	return name, also
+}

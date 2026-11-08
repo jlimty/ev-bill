@@ -229,3 +229,23 @@ func TestOrder_LOC4_FullTieBreaksByPostalCode(t *testing.T) {
 		}
 	}
 }
+
+func TestSiteNames_VIEW5(t *testing.T) {
+	tests := []struct {
+		in   []string
+		name string
+		also []string
+	}{
+		{[]string{"B", "A", "B"}, "B", []string{"A"}},
+		{[]string{"B", "A"}, "A", []string{"B"}},
+		{[]string{"A"}, "A", []string{}},
+		{[]string{"C", "B", "B", "A", "A"}, "A", []string{"B", "C"}},
+		{nil, "", []string{}},
+	}
+	for _, tt := range tests {
+		name, also := SiteNames(tt.in)
+		if name != tt.name || !reflect.DeepEqual(also, tt.also) {
+			t.Errorf("SiteNames(%v) = %q, %v; want %q, %v", tt.in, name, also, tt.name, tt.also)
+		}
+	}
+}
