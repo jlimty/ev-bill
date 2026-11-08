@@ -20,6 +20,7 @@ Guardrails for this repository, distilled from `docs/ai-review-log.md`. Row numb
 - **secrets:** `gitleaks` over history and the working tree. Nothing recorded.
 - **sonar:** the "Sonar way" quality gate must pass: coverage on new code of at least 80%, ratings A for reliability, security and maintainability, duplicated lines on new code at most 3%, all new security hotspots reviewed. Caught the unpinned scan action (row 4), the unlocked tool install and unrestricted `curl` (row 8), and two coverage shortfalls on new code, 74.9% and 78.7%, plus a shutdown context built from `context.Background()` (rows 19, 20).
 - **mutation:** `gremlins` on `internal/billing`; a report, not a blocker. Baseline: 43 killed, 0 lived, 1 timed out.
+- **sbom:** CI only, a report, not a blocker. Trivy writes a CycloneDX SBOM of the Go module, kept as the `sbom` artifact on each CI run (the run's Summary page, under Artifacts), and scans `go.mod`/`go.sum` for known vulnerabilities and licences into the job summary. `vuln` stays the blocking gate because govulncheck checks whether the code can reach a vulnerability; Trivy only matches versions. Nothing recorded.
 
 A new or changed gate must be shown failing first, including when its own tool is missing.
 
