@@ -53,6 +53,59 @@ jobs:
           name: coverage
           path: coverage.out
 
+  # A browser test of the status pages. Report-only for now, like mutation: the
+  # install and test steps use continue-on-error, so this job always concludes
+  # as success and cannot hold back the deploy (autoDeployTrigger: checksPass
+  # waits on every check). A failure is visible in the step summary and in a
+  # ::warning:: annotation. Promote it to a required, blocking check once it
+  # has been stable.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: evbilling_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/evbilling_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      # The module's own CLI, so the driver matches the version in go.mod.
+      - id: install
+        continue-on-error: true
+        run: go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium
+      - id: e2e
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: go test -tags e2e -count=1 ./e2e/...
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## Browser test (e2e)"
+            if [ "${{ steps.install.outcome }}" != "success" ]; then
+              echo "**FAIL: Playwright install did not succeed (${{ steps.install.outcome }}).**"
+              echo "::warning::e2e install step failed"
+            elif [ "${{ steps.e2e.outcome }}" = "success" ]; then
+              echo "PASS"
+            else
+              echo "**FAIL: the e2e test step failed (${{ steps.e2e.outcome }}).**"
+              echo "::warning::e2e test step failed"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   sonar:
     needs: test
     runs-on: ubuntu-latest
