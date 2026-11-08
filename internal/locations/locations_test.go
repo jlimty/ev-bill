@@ -19,6 +19,8 @@ func TestUtilizationBP_LOC2(t *testing.T) {
 		{5, 0, 10000, true},
 		{-1, 0, 0, false},
 		{0, 4, 0, true},
+		{1, 19999, 1, true}, // exactly 0.5 bp rounds up
+		{1, 39999, 0, true}, // 0.25 bp rounds down
 	}
 	for _, tt := range tests {
 		bp, ok := UtilizationBP(tt.occ, tt.avail)
@@ -63,6 +65,8 @@ func TestParsePrice_LOC6(t *testing.T) {
 		{"1.2x", "kWh", 0, false},
 		{"1000", "kWh", 0, false},
 		{"100", "kWh", 1000000, true},
+		{"0100", "kWh", 0, false},
+		{"00.5", "kWh", 5000, true},
 	}
 	for _, tt := range tests {
 		got, ok := ParsePrice(tt.price, tt.typ)
@@ -79,6 +83,8 @@ func TestValueCents_LOC6(t *testing.T) {
 		{1, 6976, 0},
 		{60000, 1000000, 600000},
 		{0, 6976, 0},
+		{1, 50000, 1}, // exactly 0.5 cent rounds up
+		{1, 49999, 0},
 	}
 	for _, tt := range tests {
 		if got := ValueCents(tt.wh, tt.price); got != tt.want {
@@ -211,4 +217,15 @@ func TestHeadline_LOC4(t *testing.T) {
 			t.Errorf("Headline = (%q, %d, %v), want (%q, 8273, true)", text, bp, ok, want)
 		}
 	})
+}
+
+func TestOrder_LOC4_FullTieBreaksByPostalCode(t *testing.T) {
+	a := Site{PostalCode: "111111", Name: "Same", Samples: 300, Occupied: 10, Available: 90}
+	b := Site{PostalCode: "222222", Name: "Same", Samples: 300, Occupied: 10, Available: 90}
+	for _, in := range [][]Site{{a, b}, {b, a}} {
+		got := Order(in)
+		if got[0].PostalCode != "111111" || got[1].PostalCode != "222222" {
+			t.Errorf("Order = %v, want postal code order", got)
+		}
+	}
 }

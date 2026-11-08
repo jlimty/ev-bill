@@ -50,6 +50,8 @@ func ParsePrice(price, priceType string) (perKWh int64, ok bool) {
 	default:
 		return 0, false
 	}
+	// Leading zeros are accepted, as in datamall.ParseKW; the length cap on the
+	// whole part still bounds the value.
 	whole, frac, hasPoint := strings.Cut(price, ".")
 	if whole == "" || len(whole) > 3 || (hasPoint && (frac == "" || len(frac) > 4)) {
 		return 0, false
@@ -77,14 +79,15 @@ func ParsePrice(price, priceType string) (perKWh int64, ok bool) {
 	return v, true
 }
 
-// ValueCents is round-half-up(wh × perKWh ÷ 100,000) cents (LOC-6).
+// ValueCents is round-half-up(wh × perKWh ÷ 100,000) cents (LOC-6). Both
+// inputs must be non-negative.
 func ValueCents(wh, perKWh int64) int64 {
 	const d = 100_000
 	return (2*wh*perKWh + d) / (2 * d)
 }
 
 // ObservedHours is the observed time for a sample count, in whole hours
-// (LOC-4).
+// (LOC-4). samples must be non-negative.
 func ObservedHours(samples int64) int64 {
 	return samples * int64(SampleEvery/time.Minute) / 60
 }
@@ -119,6 +122,16 @@ func (s Site) rank() int {
 	return 1
 }
 
+// bp is the site's utilization in basis points; 0 when there is no
+// denominator, which callers exclude through rank first.
+func (s Site) bp() int64 {
+	bp, ok := UtilizationBP(s.Occupied, s.Available)
+	if !ok {
+		return 0
+	}
+	return bp
+}
+
 // Order returns a copy of sites in display order (LOC-4): sufficient sites by
 // utilization ascending, then sites still collecting, then n/a sites. Ties
 // break by name. The input is not changed.
@@ -131,14 +144,14 @@ func Order(sites []Site) []Site {
 			return ra < rb
 		}
 		if a.rank() == 0 {
-			// Both are ranked, so both denominators are non-zero.
-			abp, _ := UtilizationBP(a.Occupied, a.Available)
-			bbp, _ := UtilizationBP(b.Occupied, b.Available)
-			if abp != bbp {
-				return abp < bbp
+			if a.bp() != b.bp() {
+				return a.bp() < b.bp()
 			}
 		}
-		return a.Name < b.Name
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.PostalCode < b.PostalCode
 	})
 	return out
 }
@@ -169,10 +182,6 @@ func Headline(sites []Site) (text string, pooledBP int64, ok bool) {
 		return fmt.Sprintf("At %s, chargers were busy %d%% of the observed time", ranked[0].Name, pct), pooledBP, true
 	}
 	least := ranked[0]
-	leastBP, leastOK := UtilizationBP(least.Occupied, least.Available)
-	if !leastOK {
-		return "", 0, false // unreachable: ranked sites have a denominator
-	}
 	return fmt.Sprintf("Across %d sites, chargers were busy %d%% of the observed time · least used: %s, %d%%",
-		len(ranked), pct, least.Name, PercentFromBP(leastBP)), pooledBP, true
+		len(ranked), pct, least.Name, PercentFromBP(least.bp())), pooledBP, true
 }
