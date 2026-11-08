@@ -143,9 +143,10 @@ func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 		data.Stopped = p.clock(*sess.StoppedAt, true)
 	}
 	widths := BarWidths(v.Bill.Segments)
+	dated := lasts24h(v.Bill.Segments)
 	for i, s := range v.Bill.Segments {
 		label, class := windowLabel(s.Window)
-		times := p.clock(s.Start, false) + " – " + p.clock(s.End, false)
+		times := p.segmentTimes(s, dated)
 		data.Rows = append(data.Rows, tableRow{
 			Label:  label,
 			Times:  times,
@@ -167,6 +168,34 @@ func (p *Pages) clock(t time.Time, withDate bool) string {
 		layout = "02 Jan 2006 15:04"
 	}
 	return t.In(p.Tariff.Location).Format(layout)
+}
+
+// lasts24h reports whether the segments cover 24 hours or more. Only then can
+// two rows share the same times of day, so only then do rows show dates.
+func lasts24h(segs []billing.Segment) bool {
+	return len(segs) > 0 && segs[len(segs)-1].End.Sub(segs[0].Start) >= 24*time.Hour
+}
+
+// segmentTimes formats a segment's span: "HH:MM – HH:MM", or with dates when
+// dated: "02 Jan 15:04 – 15:04" within one local day, and
+// "02 Jan 15:04 – 03 Jan 15:04" across midnight.
+func (p *Pages) segmentTimes(s billing.Segment, dated bool) string {
+	if !dated {
+		return p.clock(s.Start, false) + " – " + p.clock(s.End, false)
+	}
+	loc := p.Tariff.Location
+	start, end := s.Start.In(loc), s.End.In(loc)
+	endLayout := "02 Jan 15:04"
+	if sameDay(start, end) {
+		endLayout = "15:04"
+	}
+	return start.Format("02 Jan 15:04") + " – " + end.Format(endLayout)
+}
+
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }
 
 func windowLabel(w billing.Window) (label, class string) {

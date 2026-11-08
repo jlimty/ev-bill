@@ -20,8 +20,10 @@ type Plan struct {
 	MeterStartWh int64
 }
 
-// MaxPoints caps the readings in one plan so a tiny interval cannot make
-// Points allocate without bound.
+// MaxPoints caps Duration/Interval in one plan so a tiny interval cannot make
+// Points allocate without bound. A plan has at most MaxPoints+2 points, of which
+// the first is the session start and the last is the stop, so it sends at most
+// MaxPoints readings: it must not exceed sessions.MaxReadings.
 const MaxPoints = 10_000
 
 // maxMeterWh is the API's MeterWh maximum, shared with the server's rules.

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jlimty/ev-bill/internal/sessions"
 )
 
 var sgt = time.FixedZone("SGT", 8*3600)
@@ -585,5 +587,18 @@ func TestRun_CancelStopsStartedSession(t *testing.T) {
 	reqs := f.snapshot()
 	if len(reqs) != 2 || !strings.HasSuffix(reqs[1].Path, "/stop") {
 		t.Errorf("requests = %+v, want start then stop", reqs)
+	}
+}
+
+// SES-2: the largest valid plan sends no more readings than a session may hold
+// (points minus the start point and the stop).
+func TestMaxPoints_SES2_FitsSessionReadingCap(t *testing.T) {
+	p := Plan{ChargerID: "CP-01", Start: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC),
+		Duration: 10_000*time.Second + 999*time.Millisecond, Interval: time.Second, PowerW: 1000}
+	if err := Validate(p, 1, p.Start.Add(24*time.Hour)); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := len(Points(p)) - 2; got > sessions.MaxReadings {
+		t.Errorf("readings = %d, want <= %d", got, sessions.MaxReadings)
 	}
 }

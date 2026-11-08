@@ -11,6 +11,7 @@ useDefault = true
 description = "generated or git-ignored files"
 paths = [
   '''^coverage\.out$''',
+  '''^coverage-billing\.out$''',
   '''^bin/''',
   '''^\.superpowers/''',
 ]
