@@ -134,7 +134,7 @@ func (s Site) bp() int64 {
 
 // Order returns a copy of sites in display order (LOC-4): sufficient sites by
 // utilization ascending, then sites still collecting, then n/a sites. Ties
-// break by name. The input is not changed.
+// break by name, then postal code. The input is not changed.
 func Order(sites []Site) []Site {
 	out := make([]Site, len(sites))
 	copy(out, sites)

@@ -22,7 +22,7 @@ The audience is technical: people judging the Go architecture and the delivery p
 
 - Mirroring all ~11,800 connectors.
 - A map, or any JS framework.
-- Comparing the operator's posted price with our tariff. That's a possible later step. The feed's price field is recorded, but not used in billing.
+- Billing at the operator's price. The feed's price field is recorded, but not used in billing. The Locations page may show it only as a labelled estimate (LOC-6 in the Locations design).
 - Backfilling history from before the app started, or from while it was down.
 - Accurate energy. The feed has no kWh, so energy is an estimate (MIR-4).
 - Running more than one server instance.
@@ -116,7 +116,7 @@ Sleep is still handled correctly (MIR-5), because deploys, restarts and feed out
   - **`source` is returned** on every session in the API. Mirror sessions appear in `GET /api/sessions` alongside simulated ones.
   - **API-3:** `api/openapi.yaml` is updated first, adding `source` and the new error code, before the handlers change.
 - **MIR-8 Charger details.** Each poll upserts the watched connectors' details into a `chargers` table keyed by `charger_id`: location name, address, postal code, operator, position, plug type, AC/DC, rated watts, posted price as a string, price type, and `observed_at` (this poll's observation time, used by MIR-3). The page joins against it. The price is kept for display only and isn't used in billing.
-- **MIR-9 Retention.** Once an hour, delete `mirror` sessions completed more than 14 days ago, together with their readings. `api` sessions are never deleted automatically. Rough size: 50 connectors at 20–40% occupancy, with a reading every 5 min, is under about 6,000 readings a day, which is a few MB over 14 days.
+- **MIR-9 Retention.** Once an hour, delete `mirror` sessions completed more than 14 days ago, together with their readings. `api` sessions are never deleted automatically. The same job deletes occupancy samples (LOC-1) observed more than 14 days ago. Rough size: 50 connectors at 20–40% occupancy, with a reading every 5 min, is under about 6,000 readings a day, which is a few MB over 14 days.
 - **MIR-10 Config.** `LTA_ACCOUNT_KEY` is optional. When it's unset, the mirror is off and the server logs that once, so local development, tests and CI run without it. `DATAMALL_BASE_URL` is optional and defaults to `https://datamall2.mytransport.sg`; tests and the browser test point it at a fake DataMall. The three required variables (OPS-1) are unchanged. `render.yaml` declares `LTA_ACCOUNT_KEY` with `sync: false`, and the user sets it in the dashboard.
 - **MIR-11 Lifecycle.** The HTTP server, poller, retention job and hub share one root context, started and awaited with `errgroup`. When SIGTERM arrives, all of them stop and the process exits within the existing 10 s (OPS-3). A goroutine-leak check in tests proves nothing is left running.
 - **MIR-12 Occupancies longer than 48 h (SES-5).** `"0"` also covers blocked and reserved connectors, and cars can stay plugged in for days.
@@ -128,13 +128,14 @@ Sleep is still handled correctly (MIR-5), because deploys, restarts and feed out
 
 - **LIVE-1 Event stream.** `GET /events` is an SSE stream:
   - It's mounted outside the 8 s request deadline. Today `withDeadline` wraps the whole mux in `internal/server/server.go`, so the routing has to be split: `/events` must not sit behind that wrapper. Each write sets its own deadline with `http.ResponseController`, so the server's 10 s `WriteTimeout` doesn't cut it off.
+  - It serves three views: `list`, `session` (with an `id`), and `locations`, the Locations page's live section (LOC-7).
   - It sends a heartbeat comment every 25 s.
   - It caps open streams at 100 and returns 503 above that.
   - On shutdown, the hub ends every stream so `http.Server.Shutdown` can finish.
 - **LIVE-2 Hub.** One broadcaster goroutine fans "sessions changed" out to subscribers.
   - Each subscriber has a buffer of 1 that coalesces signals: if a signal is already waiting, the new one is dropped, so a slow browser can never block the reconciler.
   - The reconciler publishes after each cycle that changed something.
-- **LIVE-3 What's pushed.** On each signal, the stream sends the re-rendered list-table body (or the detail page's live section), built with `html/template` so it's escaped. One same-origin script (`/static/live.js`) swaps it into place.
+- **LIVE-3 What's pushed.** On each signal, the stream sends the re-rendered list-table body (or the detail page's live section, or the Locations page's live section), built with `html/template` so it's escaped. One same-origin script (`/static/live.js`) swaps it into place.
   - The CSP becomes `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`.
   - Without JS, a `<noscript>` meta refresh keeps today's 3 s behaviour.
 - **LIVE-4 Page content.**

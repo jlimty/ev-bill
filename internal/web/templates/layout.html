@@ -13,7 +13,14 @@
 body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
 header, main, footer { max-width:56rem; margin:0 auto; padding:0 1rem; }
 header { padding-top:1.5rem; padding-bottom:.5rem; }
-header a { color:var(--ink); font-weight:700; text-decoration:none; }
+.top { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:0 1rem; }
+.brand { color:var(--ink); font-weight:700; text-decoration:none; }
+nav { color:var(--muted); font-size:.95rem; }
+nav a { display:inline-block; padding:.5rem .125rem; text-decoration:none; }
+nav a:hover { text-decoration:underline; }
+nav a[aria-current="page"] { color:var(--ink); font-weight:600; text-decoration:underline; text-decoration-thickness:2px; text-underline-offset:.35em; }
+a:focus-visible { outline:2px solid var(--link); outline-offset:2px; border-radius:2px; }
+::selection { background:color-mix(in srgb, var(--link) 22%, transparent); }
 h1 { font-size:1.5rem; margin:.5rem 0 1rem; }
 a { color:var(--link); }
 .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:1rem; margin-bottom:1rem; overflow-x:auto; }
@@ -49,12 +56,50 @@ dd { margin:0; }
 .notice { color:var(--muted); font-size:.9rem; margin:0 0 1rem; }
 .feed { margin:0 0 .75rem; color:var(--muted); font-size:.9rem; }
 .feed.warn { color:#8a3b00; font-weight:600; }
+.window { margin:-.5rem 0 .25rem; color:var(--muted); font-size:.9rem; font-variant-numeric:tabular-nums; }
+.headline { margin:0 0 1rem; font-size:1.125rem; font-weight:600; line-height:1.4; max-width:65ch; text-wrap:balance; }
+.empty.warn { color:#8a3b00; font-weight:600; }
+.site { position:relative; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:1rem; margin-bottom:1rem; }
+.site .head { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; }
+.site h2 { font-size:1.125rem; line-height:1.3; margin:0; }
+.site .sub { margin:.125rem 0 0; }
+.util { margin:0; text-align:right; line-height:1; flex:none; }
+.util .pct { display:block; font-size:2.25rem; font-weight:700; letter-spacing:-0.02em; font-variant-numeric:tabular-nums; }
+.util .label { display:block; margin-top:.3rem; font-size:.8rem; color:var(--muted); }
+.cells { display:flex; flex-wrap:wrap; gap:4px; list-style:none; margin:1rem 0 .5rem; padding:0; }
+.cell { display:block; flex:none; width:14px; height:14px; border-radius:3px; border:1.5px solid var(--ink); background:var(--card); }
+.cell.busy { background:var(--ink); }
+.cell.out { border-color:var(--muted); background:repeating-linear-gradient(135deg, var(--muted) 0 1.5px, var(--card) 1.5px 4px); }
+.cells.muted .cell, .cell.muted { opacity:.5; border-color:var(--muted); }
+.cells.muted .cell.busy, .cell.busy.muted { background:var(--muted); }
+.count { margin:0; font-size:.9rem; font-variant-numeric:tabular-nums; }
+.profile { margin-top:1rem; }
+.profile .caption { margin:0 0 .25rem; }
+.strip { display:flex; align-items:flex-end; gap:2px; height:3.5rem; list-style:none; margin:0; padding:0; border-bottom:1px solid var(--line); }
+.hour { flex:1 1 0; min-width:0; min-height:2px; border-radius:2px 2px 0 0; }
+.hour.peak { background:var(--peak); }
+.hour.offpeak { background:var(--off); }
+.hour.nodata { height:.5rem; border:1px dotted var(--muted); border-bottom:0; }
+.ticks { display:grid; grid-template-columns:repeat(24, minmax(0, 1fr)); column-gap:2px; margin-top:.25rem; font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.t00 { grid-column:1; } .t06 { grid-column:7; } .t12 { grid-column:13; } .t18 { grid-column:19; } .t23 { grid-column:24; justify-self:end; }
+.facts { margin:.75rem 0 0; font-size:.9rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+.note { margin:.25rem 0 0; font-size:.85rem; font-weight:600; color:var(--muted); }
+/* Visually hidden, still read by screen readers. On a wrapper, since a table ignores width and overflow. */
+.vh { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.key { margin:1.5rem 0 1rem; padding-top:1rem; border-top:1px solid var(--line); }
+.key .legend { margin:0 0 .75rem; }
+.swatch.nodata { border:1px dotted var(--muted); }
+@media (max-width:359px) { .t06, .t18 { display:none; } }
 footer { color:var(--muted); font-size:.85rem; padding-bottom:2rem; }
 footer p { margin:.25rem 0; }
 </style>
 </head>
 <body{{with .Stream}} data-stream="{{.}}"{{end}}>
-<header><a href="/">EV billing</a><p class="tariff">{{.Tariff}}</p></header>
+<header>
+<div class="top"><a class="brand" href="/">EV billing</a>
+<nav aria-label="Pages"><a href="/"{{if eq .Nav "sessions"}} aria-current="page"{{end}}>Sessions</a> · <a href="/locations"{{if eq .Nav "locations"}} aria-current="page"{{end}}>Locations</a></nav></div>
+<p class="tariff">{{.Tariff}}</p>
+</header>
 <main>
 {{template "content" .}}
 </main>

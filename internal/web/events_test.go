@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/datamall"
 	"github.com/jlimty/ev-bill/internal/live"
 	"github.com/jlimty/ev-bill/internal/sessions"
+	"github.com/jlimty/ev-bill/internal/store"
 )
 
 // streamEnv is an env whose Pages has a running hub and whose mux, served by
@@ -269,7 +271,8 @@ func TestEvents_LIVE1_Over100Is503(t *testing.T) {
 	}
 }
 
-// LIVE-1: only the list and session views exist; a session must exist.
+// LIVE-1, LOC-7: only the list, session and locations views exist; a session
+// must exist.
 func TestEvents_BadView(t *testing.T) {
 	e := newStreamEnv(t, 1, nil)
 	for _, tc := range []struct {
@@ -761,4 +764,47 @@ func TestEvents_LIVE1_FinalFragmentEndsStream(t *testing.T) {
 			t.Errorf("LIVE-1: final first event: body = %q", body)
 		}
 	})
+}
+
+// LOC-7, LIVE-1, LIVE-2: the locations view streams the same locations_body
+// the page renders, first on connect and again after Publish, and its streams
+// share one render per hub generation through the render cache.
+func TestEvents_LOC7_LocationsView(t *testing.T) {
+	e := newStreamEnv(t, 100, nil)
+	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, nil)
+
+	c := openStream(t, e.srv, "/events?view=locations")
+	first := c.mustNext("locations")
+	wantContains(t, first, "<h2>Alpha Mall</h2>", `<li class="cell free" title="A-001 · 22 kW AC · Type 2 · free"></li>`)
+	if page := e.get("/locations").Body.String(); !strings.Contains(page, `<div data-live="locations">`+first) {
+		t.Errorf("LOC-7: locations event is not the content of the swapped element:\nevent: %s\npage: %s", first, page)
+	}
+	other := openStream(t, e.srv, "/events?view=locations")
+	other.mustNext("locations")
+
+	busy := locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Occupied)
+	busy.ObservedAt = locObserved.Add(time.Minute)
+	e.observe([]store.ChargerRow{busy}, nil)
+	before := e.p.renders.renders.Load()
+	e.hub.Publish()
+	for _, s := range []*sseClient{c, other} {
+		wantContains(t, s.mustNext("locations"), `<li class="cell busy" title="A-001 · 22 kW AC · Type 2 · busy"></li>`)
+	}
+	if n := e.p.renders.renders.Load() - before; n != 1 {
+		t.Errorf("LIVE-2: one Publish to 2 locations streams made %d renders, want 1", n)
+	}
+}
+
+// LOC-7: a store failure on the locations view is a 500 before the first
+// event, with the cause only in the log.
+func TestEvents_LOC7_LocationsStoreFailureIs500(t *testing.T) {
+	e := newStreamEnv(t, 1, nil)
+	e.pool.Close()
+	rec := e.get("/events?view=locations")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /events?view=locations = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(e.logs.String(), "location scope") {
+		t.Errorf("cause not logged: %q", e.logs.String())
+	}
 }

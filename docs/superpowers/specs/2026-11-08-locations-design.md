@@ -81,12 +81,12 @@ The audience is engineers first, with numbers framed so that someone who runs ch
 - **LOC-5 Live connector state.**
   - **Which sites get a card:** postal codes present in the newest observation in `chargers` (the current scope). A site removed from `MIRROR_POSTAL_CODES` drops off the page. Its samples age out after 14 days and are never shown.
   - Each location shows one cell per connector currently in scope, taken from the newest observation in `chargers`.
-  - **Not live:** if the mirror is off, or the feed line is in its warning state (no good poll for more than 15 min), the grid still shows the last known states. But the cells are drawn muted, and the count reads "as of 13:20" rather than as current.
+  - **Not live:** if the mirror is off, the feed line is in its warning state (no good poll for more than 15 min), or no poll has succeeded since the server started, the grid still shows the last known states. But the cells are drawn muted, and the count reads "as of 13:20" rather than as current. When that observation isn't from today (Singapore time), the date is included: "as of 06 Nov 2026 23:59".
   - A cell's state is busy (occupied), free (available) or out of service, with a distinct fill or outline pattern for each, not colour alone, and a legend.
   - A text count sits beside each grid: "9 busy · 17 free · 2 out".
   - Each cell's hover label gives the charger ID, kW, AC/DC, plug type and state.
   - The page shows the age of that state using the same feed line as the sessions page (LIVE-4).
-- **LOC-6 Sessions, energy and estimated value.** Per location, over the same window:
+- **LOC-6 Sessions, energy and estimated value.** Per location, over the same window: sessions count only if they started at or after that site's first sample in the window, so nothing from before observation began is included.
   - **Billing sessions:** the number of mirror sessions started in the window at that location's chargers. The label says "billing sessions", because a gap or the 48 h limit can split one car's stay into more than one (MIR-5, MIR-12).
   - **Est. energy:** the sum of each session's energy (last meter − start meter).
   - **Est. value at posted price:** the sum over sessions of round-half-up(Wh × price ÷ 100,000) cents, where price is the charger's current posted price in ten-thousandths of a dollar per kWh. For example `"0.6976"` = 6976, which is 69.76¢/kWh.
@@ -169,6 +169,7 @@ The audience is engineers first, with numbers framed so that someone who runs ch
 - Today's posted price applied to the whole window (LOC-6), labelled as such.
 - Peak hours for the strip colouring are 07:00–22:59, matching BIL-2's 07:00–23:00.
 - `/locations` as a separate page rather than a section of the sessions list.
+- Muting also applies until the first successful poll after a restart, so states stored before the restart are never shown as current (LOC-5, from the whole-branch review).
 
 ## Left to implementation
 

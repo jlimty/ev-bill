@@ -34,9 +34,10 @@ var staticFS embed.FS
 // fragments from these sets, so the page and the stream cannot disagree.
 // The files are embedded, so a parse failure is a programming error.
 var pageTemplates = map[string]*template.Template{
-	"list":   parsePage("list", "list_body"),
-	"detail": parsePage("detail", "detail_live"),
-	"error":  parsePage("error"),
+	"list":      parsePage("list", "list_body"),
+	"detail":    parsePage("detail", "detail_live"),
+	"error":     parsePage("error"),
+	"locations": parsePage("locations", "locations_body"),
 }
 
 func parsePage(name string, fragments ...string) *template.Template {
@@ -66,18 +67,28 @@ type Pages struct {
 func (p *Pages) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", p.list)
 	mux.HandleFunc("GET /sessions/{id}", p.detail)
+	mux.HandleFunc("GET /locations", p.locations)
 	mux.HandleFunc("GET /static/live.js", p.liveJS)
 }
 
 // layoutData is what the layout needs. Stream is the query live.js passes to
 // GET /events, such as "view=list"; it is empty on pages that do not update,
-// which then load no script and do not refresh (LIVE-3).
+// which then load no script and do not refresh (LIVE-3). Nav names the header
+// link of the current page, navSessions or navLocations, which gets
+// aria-current="page"; it is empty on other pages (LOC-7).
 type layoutData struct {
 	Title  string
 	Stream string
 	Tariff string
 	TZ     string
+	Nav    string
 }
+
+// The header links' names for layoutData.Nav (LOC-7).
+const (
+	navSessions  = "sessions"
+	navLocations = "locations"
+)
 
 // listRow is one session on the list page. Source is "mirror" or "simulated";
 // Location and Info ("Testco · 7.4 kW AC") are empty without a chargers row.
@@ -203,7 +214,7 @@ func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
 // uses. The totals add up the rows' int64 values and are formatted once.
 func (p *Pages) listData(ctx context.Context) (listPage, error) {
 	now := p.Now()
-	feed, err := p.feedLine(ctx, now)
+	feed, err := p.feedLine(ctx, now, p.feedState())
 	if err != nil {
 		return listPage{}, err
 	}
@@ -212,6 +223,7 @@ func (p *Pages) listData(ctx context.Context) (listPage, error) {
 		return listPage{}, fmt.Errorf("list sessions: %w", err)
 	}
 	data := listPage{layoutData: p.layout("Charging sessions", "view=list"), Notice: estimateNotice, Feed: feed, Rows: []listRow{}}
+	data.Nav = navSessions
 	var energyWh, costCents int64
 	for _, it := range items {
 		v, err := sessions.BuildView(it.Session, it.Readings, p.Tariff, now)
@@ -240,15 +252,21 @@ func (p *Pages) listData(ctx context.Context) (listPage, error) {
 	return data, nil
 }
 
-// feedLine builds the mirror's status line (LIVE-4): off, waiting for the
-// first good poll, unavailable when no poll has succeeded and the last one
+// feedState loads the mirror's current state, or the zero state (mirror off)
+// when the page has no Feed. A page loads it once per render so that every
+// part of the page reads the same state.
+func (p *Pages) feedState() live.FeedState {
+	if p.Feed == nil {
+		return live.FeedState{}
+	}
+	return p.Feed.Load()
+}
+
+// feedLine builds the mirror's status line (LIVE-4) from st: off, waiting for
+// the first good poll, unavailable when no poll has succeeded and the last one
 // failed, live, or delayed once the last good poll is more than
 // feedDelayedAfter old, plus the connectors held after a 48 h stop (MIR-12).
-func (p *Pages) feedLine(ctx context.Context, now time.Time) (feedLine, error) {
-	var st live.FeedState
-	if p.Feed != nil {
-		st = p.Feed.Load()
-	}
+func (p *Pages) feedLine(ctx context.Context, now time.Time, st live.FeedState) (feedLine, error) {
 	if !st.Enabled {
 		return feedLine{Text: "Live mirror off"}, nil
 	}
