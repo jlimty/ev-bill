@@ -1,0 +1,145 @@
+{
+  "LastUpdatedTime": "2026-11-08 13:45:00",
+  "feedNote": {"unknown": ["extra", 1, null]},
+  "evLocationsData": [
+    {
+      "address": "2 Test Road",
+      "name": "Testville Mall",
+      "longtitude": "103.000001",
+      "latitude": "1.300001",
+      "postalCode": "100002",
+      "extraLocationKey": {"a": 1},
+      "chargingPoints": [
+        {
+          "status": "1",
+          "operatingHours": "",
+          "operator": "Testco DC",
+          "position": "Level B2",
+          "name": "Bay 7",
+          "extraPointKey": [1, 2],
+          "plugTypes": [
+            {
+              "plugType": "CCS/SAE",
+              "price": "0.7000",
+              "current": "DC",
+              "powerRating": "120",
+              "priceType": "",
+              "extraPlugKey": true,
+              "evIds": [
+                {"evCpId": "TST-B-002", "status": "9", "extraIdKey": "x"},
+                {"evCpId": "TST-B-001", "status": "", "extraIdKey": "x"}
+              ]
+            },
+            {
+              "plugType": "CHAdeMO",
+              "price": "0.0000",
+              "current": "DC",
+              "powerRating": "50",
+              "priceType": "free",
+              "evIds": [
+                {"evCpId": "TST-B-003", "status": "0"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "address": "1 Sample Lane",
+      "name": "Sample Car Park",
+      "longtitude": "103.000002",
+      "latitude": "1.300002",
+      "postalCode": "100001",
+      "chargingPoints": [
+        {
+          "status": "1",
+          "operatingHours": "",
+          "operator": "Sampleco AC",
+          "position": "Lot 12",
+          "name": "Post 1",
+          "plugTypes": [
+            {
+              "plugType": "Type 2",
+              "price": "0.6976",
+              "current": "AC",
+              "powerRating": "7.4",
+              "priceType": "kWh",
+              "evIds": [
+                {"evCpId": "TST-A-002", "status": "0"},
+                {"evCpId": "TST-A-001", "status": "1"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "address": "3 Broken Street",
+      "name": "Broken Rating Plaza",
+      "longtitude": "103.000003",
+      "latitude": "1.300003",
+      "postalCode": "100003",
+      "chargingPoints": [
+        {
+          "status": "1",
+          "operatingHours": "",
+          "operator": "Brokenco",
+          "position": "Level 1",
+          "name": "Bay 1",
+          "plugTypes": [
+            {
+              "plugType": "Type 2",
+              "price": "0.5000",
+              "current": "AC",
+              "powerRating": "7.4.1",
+              "priceType": "kWh",
+              "evIds": [
+                {"evCpId": "TST-C-001", "status": "1"}
+              ]
+            },
+            {
+              "plugType": "Type 2",
+              "price": "0.5000",
+              "current": "AC",
+              "powerRating": "0",
+              "priceType": "kWh",
+              "evIds": [
+                {"evCpId": "TST-C-002", "status": "1"}
+              ]
+            },
+            {
+              "plugType": "Type 2",
+              "price": "0.5000",
+              "current": "ac",
+              "powerRating": "7.4",
+              "priceType": "kWh",
+              "evIds": [
+                {"evCpId": "TST-C-003", "status": "1"}
+              ]
+            },
+            {
+              "plugType": "Type 2",
+              "price": "0.5000",
+              "current": "",
+              "powerRating": "7.4",
+              "priceType": "kWh",
+              "evIds": [
+                {"evCpId": "TST-C-004", "status": "1"}
+              ]
+            },
+            {
+              "plugType": "Type 2",
+              "price": "0.5000",
+              "current": "DC",
+              "powerRating": "50",
+              "priceType": "kWh",
+              "evIds": [
+                {"evCpId": "TST-C-005", "status": "1"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
