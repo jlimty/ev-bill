@@ -119,8 +119,8 @@ func TestLocations_LOC7_Route(t *testing.T) {
 	detail := e.get("/sessions/not-a-uuid").Body.String()
 	wantContains(t, detail, `<nav aria-label="Pages"><a href="/">Locations</a> · <a href="/sessions" aria-current="page">Sessions</a></nav>`)
 
-	// live.js swaps the locations event into its element like the others.
-	wantContains(t, e.get("/static/live.js").Body.String(), "source.addEventListener('locations', swap);")
+	// live.js applies the locations event to its element like the others (VIEW-6).
+	wantContains(t, e.get("/static/live.js").Body.String(), "source.addEventListener('locations', apply);")
 }
 
 // LOC-4, LOC-6: the window line, the pooled headline, the per-site order and

@@ -542,8 +542,8 @@ func TestList_LIVE3_CSPAndScript(t *testing.T) {
 	}
 }
 
-// LIVE-3: live.js is served same-origin as JavaScript, with the security
-// headers, and opens the event stream.
+// LIVE-3, VIEW-6: live.js is served same-origin as JavaScript, with the
+// security headers, opens the event stream, and parses only event data.
 func TestStatic_LIVE3_LiveJS(t *testing.T) {
 	e := newEnv(t)
 	rec := e.get("/static/live.js")
@@ -564,7 +564,12 @@ func TestStatic_LIVE3_LiveJS(t *testing.T) {
 		"source.readyState !== EventSource.CLOSED",
 		"setTimeout(function () { location.reload(); }, 30000 + Math.floor(Math.random() * 15000))",
 		"addEventListener('done'", "source.close()")
-	for _, banned := range []string{"eval(", "Function(", "document.write", "setAttribute('on", ".onclick", "setTimeout('", `setTimeout("`} {
+	// VIEW-6: the only HTML parsed is the event's server-rendered fragment,
+	// into an inert template, never into the live page directly.
+	if n := strings.Count(js, "innerHTML"); n != 1 || !strings.Contains(js, "next.innerHTML = e.data;") {
+		t.Errorf("VIEW-6: live.js uses innerHTML %d times, want once, on the event's fragment", n)
+	}
+	for _, banned := range []string{"eval(", "Function(", "document.write", "setAttribute('on", ".onclick", "setTimeout('", `setTimeout("`, "outerHTML ="} {
 		if strings.Contains(js, banned) {
 			t.Errorf("LIVE-3: live.js contains %q", banned)
 		}
@@ -1268,5 +1273,42 @@ func TestDetail_VIEW1_RatesAndTable(t *testing.T) {
 	sim := newEnv(t)
 	if body := sim.get("/sessions/" + sim.mockup("CP-X")).Body.String(); strings.Contains(body, " est.") {
 		t.Errorf("VIEW-1: simulated detail page shows est.")
+	}
+}
+
+// streamStatus is the stream-state element live.js writes (VIEW-6). The
+// server renders it empty.
+const streamStatus = `<p class="stream-status" aria-live="polite" data-stream-status></p>`
+
+// VIEW-6: every streaming page has exactly one empty, polite status element,
+// in the header, so outside every live region. A page without a stream (a
+// cursor page, a completed session, an error page) has none.
+func TestLayout_VIEW6_StatusElement(t *testing.T) {
+	e := newEnv(t)
+	for i := range 51 {
+		e.start(fmt.Sprintf("CP-%02d", i), fixedNow().Add(-time.Duration(i)*time.Minute))
+	}
+	active := e.start("CP-ACTIVE", sgt(0, 19, 7))
+	first := e.get("/sessions").Body.String()
+	for _, path := range []string{"/", "/sessions", "/sessions/" + active} {
+		body := e.get(path).Body.String()
+		if n := strings.Count(body, "data-stream-status"); n != 1 {
+			t.Errorf("VIEW-6: %s has %d status elements, want 1", path, n)
+		}
+		at, main := strings.Index(body, streamStatus), strings.Index(body, `<main id="content">`)
+		if at < 0 || at > main {
+			t.Errorf("VIEW-6: %s: status element missing, or not in the header before <main>", path)
+		}
+		if live := strings.Index(body, "data-live="); live < main {
+			t.Errorf("VIEW-6: %s: a live region starts before <main>", path)
+		}
+		if a := strings.Index(body, `aria-live`); a != strings.Index(body, `aria-live="polite" data-stream-status`) {
+			t.Errorf("VIEW-6: %s: another aria-live region precedes the status element", path)
+		}
+	}
+	for _, path := range []string{linkWithKey(t, first, "pager-next"), "/sessions/" + e.mockup("CP-DONE"), "/sessions/not-a-uuid"} {
+		if body := e.get(path).Body.String(); strings.Contains(body, "data-stream-status") {
+			t.Errorf("VIEW-6: %s has no stream but has a status element", path)
+		}
 	}
 }
