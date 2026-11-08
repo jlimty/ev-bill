@@ -37,4 +37,6 @@ Every log row records what went wrong, how it was caught, the fix, and a decisio
 - Surviving mutants. The baseline documents the equivalent ones; none survive at present.
 - Render dashboard steps.
 
-A load run has not been performed, so there is no latency figure.
+## Load run
+
+With a local server on port 18092 (Apple M5, Go 1.27.3, Postgres 18.4, a pool of 10 connections), `API_KEY=<key> go run ./cmd/simulator -url http://localhost:18092 -chargers 200 -speed 600 -duration 60m` sent 2,600 requests in about 6 s, all 2xx. Server-side `duration_ms`, in whole milliseconds: p50 1, p95 36, p99 40, max 42. Every request at or above the p95 was a session start; the 200 starts arrived within 40 ms of each other (p95 40), which is consistent with them waiting for the 10-connection pool, though pool wait was not measured. Meter values and stops had a p95 of 10. Render's free web service has 0.1 CPU, so these figures are a local baseline, not a production measurement.
