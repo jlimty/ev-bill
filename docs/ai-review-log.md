@@ -34,21 +34,23 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 28 | 2026-11-08 | Mirror Task 4 / MIR-7, MIR-4 | After a mirror start was skipped because an API session held the charger, a days-old mirror stop was later treated as part of the current occupancy, so the charger could be held wrongly or the old meter carried | review | Stops older than the charger's last stored observation are ignored | Test against the real database |
 | 29 | 2026-11-08 | Mirror plan / MIR-6 | The plan's expected meter value (1,233 Wh after 10 min at 7.4 kW) ignored per-step truncation; the code correctly gives 616 then 1,232 | pre-flight scan | Plan corrected before work started | None |
 | 30 | 2026-11-08 | Mirror Task 3 / process | Tests were written together with the code, skipping the failing-first run the plan asked for | implementer's own report | None needed; the review checks tests against the rules | None |
+| 31 | 2026-11-08 | Mirror Tasks 5–6 / LIVE-1, LIVE-2 | Every open stream re-rendered the page on every signal, with no sharing or throttle; at the 100-stream cap one 30 s tick cost about 1.3 CPU-s locally, enough to starve a 0.1 CPU free instance and its 10-connection pool | review (whole-branch) | One shared render per view per hub generation, a 2 s minimum gap per stream, and at most 2 renders at once | Tests: 100 streams give 1 render; a 50-signal burst gives at most 2 renders per stream |
+| 32 | 2026-11-08 | Mirror Task 2 / MIR-1 | The parser fully decoded all ~2,800 feed locations before filtering, so one wrong-typed field at any unwatched location would have failed every poll | review (whole-branch) | Only watched locations are fully decoded; a malformed watched location skips its connectors | Test: a numeric field at an unwatched location no longer fails the poll |
 
 ## Tally
 
-Rows counted by the "Caught by" column (30 rows):
+Rows counted by the "Caught by" column (32 rows):
 
 | Caught by | Rows | Count |
 |---|---|---|
-| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 26, 27, 28 | 19 |
+| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 26, 27, 28, 31, 32 | 21 |
 | review (manual mutation) | 7, 12, 13, 16, 23 | 5 |
 | sonar | 4, 8, 19, 20 | 4 |
 | scan (pre-flight scan of the plan) | 29 | 1 |
 | implementer's own report | 30 | 1 |
 | test, lint, mutation | none | 0 |
 
-Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30). Rows 3, 14, 17, 29 and 30 are "none" decisions; 14, 17, 29 and 30 give a reason or note, 3 does not.
+Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30). Rows 3, 14, 17, 29 and 30 are "none" decisions; 14, 17, 29 and 30 give a reason or note, 3 does not.
 
 ## Mutation baseline
 
