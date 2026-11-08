@@ -21,6 +21,14 @@ type ChargerRow struct {
 	ObservedAt time.Time
 }
 
+// OccupancySample is one watched location's connector counts in one applied
+// snapshot (LOC-1).
+type OccupancySample struct {
+	PostalCode                       string
+	ObservedAt                       time.Time
+	Occupied, Available, Unavailable int
+}
+
 // MirrorStop is the latest stopped mirror session of a charger (MIR-4, MIR-12).
 type MirrorStop struct {
 	MeterWh              int64
@@ -44,10 +52,26 @@ ON CONFLICT (charger_id) DO UPDATE SET
 	status = EXCLUDED.status, held = EXCLUDED.held, observed_at = EXCLUDED.observed_at
 WHERE chargers.observed_at <= EXCLUDED.observed_at`
 
+// insertSampleSQL stores one occupancy sample (LOC-1). A sample already stored
+// for the same location and observation is kept: MIR-3 stops a committed
+// observation from being applied twice, and this guards against two instances
+// writing at once during a deploy overlap.
+const insertSampleSQL = `INSERT INTO occupancy_samples (postal_code, observed_at, occupied, available, unavailable)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (postal_code, observed_at) DO NOTHING`
+
 // UpsertChargers writes rows in one transaction: either every row is stored or
 // none is. Chargers missing from rows are left as they are.
 func (s *Store) UpsertChargers(ctx context.Context, rows []ChargerRow) error {
-	if len(rows) == 0 {
+	return s.ApplyObservation(ctx, rows, nil)
+}
+
+// ApplyObservation stores one observation in one transaction: the charger
+// upserts (MIR-8), then the occupancy samples (LOC-1). Either everything is
+// stored or nothing is. With nothing to store it returns nil without opening
+// a transaction.
+func (s *Store) ApplyObservation(ctx context.Context, rows []ChargerRow, samples []OccupancySample) error {
+	if len(rows) == 0 && len(samples) == 0 {
 		return nil
 	}
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
@@ -58,10 +82,16 @@ func (s *Store) UpsertChargers(ctx context.Context, rows []ChargerRow) error {
 				return fmt.Errorf("charger %s: %w", r.ChargerID, err)
 			}
 		}
+		for _, smp := range samples {
+			if _, err := tx.Exec(ctx, insertSampleSQL,
+				smp.PostalCode, norm(smp.ObservedAt), smp.Occupied, smp.Available, smp.Unavailable); err != nil {
+				return fmt.Errorf("sample %s: %w", smp.PostalCode, err)
+			}
+		}
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("upsert chargers: %w", err)
+		return fmt.Errorf("apply observation: %w", err)
 	}
 	return nil
 }
@@ -175,6 +205,16 @@ func (s *Store) DeleteCompletedMirrorBefore(ctx context.Context, cutoff time.Tim
 		`DELETE FROM sessions WHERE source = 'mirror' AND stopped_at IS NOT NULL AND stopped_at < $1`, norm(cutoff))
 	if err != nil {
 		return 0, fmt.Errorf("delete completed mirror sessions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DeleteSamplesBefore deletes occupancy samples observed before cutoff and
+// returns how many it deleted (LOC-1, MIR-9).
+func (s *Store) DeleteSamplesBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM occupancy_samples WHERE observed_at < $1`, norm(cutoff))
+	if err != nil {
+		return 0, fmt.Errorf("delete occupancy samples: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }
