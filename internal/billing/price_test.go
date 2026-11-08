@@ -13,7 +13,7 @@ func TestSegmentCost_BIL5(t *testing.T) {
 		wh, rate int64
 		want     int64
 	}{
-		{"9600 Wh peak", 9600, 62, 595},     // 595.2 rounds down
+		{"9600 Wh peak", 9600, 62, 596},     // 595.2 rounds down
 		{"8400 Wh off-peak", 8400, 48, 403}, // 403.2 rounds down
 		{"1250 Wh peak", 1250, 62, 78},      // 77.5 rounds up (the half)
 		{"zero energy", 0, 62, 0},
