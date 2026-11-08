@@ -70,8 +70,10 @@ func (p *Poller) cycle(ctx context.Context) {
 	if ctx.Err() != nil {
 		return // shutting down: not a feed failure
 	}
-	// Fetch errors are already redacted by package datamall: no AccountKey,
-	// no presigned query string.
+	// A failed fetch, a failed reconcile and a snapshot skipped as
+	// ErrFutureSnapshot all land here: LastError is set and LastGood is left
+	// alone. Fetch errors are already redacted by package datamall: no
+	// AccountKey, no presigned query string.
 	p.Logger.Warn(msgPollFailed, "error", err)
 	st := p.Feed.Load()
 	st.Enabled, st.LastError = true, err.Error()

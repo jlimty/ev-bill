@@ -21,9 +21,13 @@ const (
 	msgBadID        = "mirror: connector ignored, charger ID not allowed by SES-1"
 	msgOverCap      = "mirror: connectors over the cap ignored"
 	msgNoConnectors = "mirror: the watched postal codes select no connectors"
-	msgFuture       = "mirror: feed timestamp is in the future, cycle skipped"
 	msgPollFailed   = "mirror: poll failed"
 )
+
+// ErrFutureSnapshot is returned by Apply for a feed timestamp more than
+// sessions.MaxClockSkew ahead of the server clock (MIR-3). The snapshot is
+// skipped, and the poller counts it as a failed poll, not a good one.
+var ErrFutureSnapshot = errors.New("mirror: feed timestamp is more than 5 min in the future")
 
 // MirrorStore is the part of the store the reconciler uses.
 type MirrorStore interface {
@@ -65,8 +69,10 @@ func (r *Reconciler) Apply(ctx context.Context, snap datamall.Snapshot) (changed
 	}
 	now := r.Now()
 	if observed.After(now.Add(sessions.MaxClockSkew)) {
-		r.Logger.Warn(msgFuture, "observed", observed, "now", now)
-		return false, nil // MIR-3, SES-2
+		// MIR-3, SES-2: skipped, and reported so the poller does not count it
+		// as a good poll.
+		return false, fmt.Errorf("%w: observed %s, server clock %s",
+			ErrFutureSnapshot, observed.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
 	}
 
 	conns := r.scope(snap)
@@ -168,6 +174,16 @@ func (r *Reconciler) load(ctx context.Context, observed time.Time, conns []datam
 		}
 	}
 	for id, s := range stops {
+		// A stop belongs to the current occupancy only if it is at or after the
+		// charger's last stored observation. A gap stop sits at the last point,
+		// which is that poll's observed_at; a 48 h stop falls after it. An older
+		// stop is from an earlier occupancy, for example before a MIR-7 skip or
+		// before the charger left scope, and must neither carry its meter
+		// (MIR-4) nor hold the charger (MIR-12).
+		row, ok := prev[id]
+		if !ok || s.StoppedAt.Before(row.ObservedAt) {
+			continue
+		}
 		in.LastStop[id] = LastStop{MeterWh: s.MeterWh, AtLimit: s.StoppedAt.Sub(s.StartedAt) >= sessions.MaxDuration}
 	}
 	return in, prev, nil

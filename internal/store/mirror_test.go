@@ -208,7 +208,8 @@ func TestStore_MIR4_LastMirrorStopsNewestPerCharger(t *testing.T) {
 	}
 }
 
-// MIR-12: HeldCount counts chargers held after a 48 h stop.
+// MIR-12: HeldCount counts chargers held after a 48 h stop, among those the
+// latest poll observed (rows for chargers that left scope are ignored).
 func TestStore_MIR12_HeldCount(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
@@ -225,6 +226,19 @@ func TestStore_MIR12_HeldCount(t *testing.T) {
 	}
 	if n, err := s.HeldCount(ctx()); err != nil || n != 2 {
 		t.Fatalf("HeldCount = %d, %v; want 2", n, err)
+	}
+
+	// SG-2 leaves scope: only SG-1 and SG-3 are in the newer poll. A held row
+	// that the latest poll did not observe is not counted.
+	newer := []store.ChargerRow{
+		chargerRow("SG-1", datamall.Occupied, true, at(10, 5, 0, 0)),
+		chargerRow("SG-3", datamall.Occupied, false, at(10, 5, 0, 0)),
+	}
+	if err := s.UpsertChargers(ctx(), newer); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.HeldCount(ctx()); err != nil || n != 1 {
+		t.Fatalf("HeldCount after SG-2 left scope = %d, %v; want 1", n, err)
 	}
 }
 

@@ -128,6 +128,11 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // retention job under one errgroup; after the first poll lands, cancelling
 // the context stops all of them and run returns nil within 10 s. MIR-1: the
 // AccountKey never reaches the log.
+//
+// The goroutine-leak checks for the poller and the retention loop live in
+// their synctest tests (internal/mirror), which fail if any goroutine is left
+// behind. This test proves the errgroup as wired in run returns within the
+// shutdown bound.
 func TestRun_MIR11_ShutsDownWithinTimeout(t *testing.T) {
 	pool := testdb.New(t)
 	dm := fakeDataMall(t)

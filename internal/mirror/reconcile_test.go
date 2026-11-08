@@ -225,24 +225,25 @@ func TestReconcile_MIR3_OlderFeedAfterRestartIsNoop(t *testing.T) {
 	}
 }
 
-// MIR-3: a timestamp more than 5 min ahead of the server clock is skipped
-// with a warning; exactly 5 min ahead is accepted (SES-2's skew).
+// MIR-3: a timestamp more than 5 min ahead of the server clock is skipped and
+// reported as ErrFutureSnapshot, so the poller does not count it as a good
+// poll; exactly 5 min ahead is accepted (SES-2's skew).
 func TestReconcile_MIR3_FutureFeedSkipped(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.clock = r0
 	changed, err := h.rec.Apply(context.Background(), snapAt(r0.Add(sessions.MaxClockSkew+time.Second), ac("SG-1", datamall.Occupied)))
-	if err != nil || changed {
-		t.Fatalf("future feed: Apply = (%v, %v), want (false, nil)", changed, err)
+	if !errors.Is(err, ErrFutureSnapshot) || changed {
+		t.Fatalf("future feed: Apply = (%v, %v), want (false, ErrFutureSnapshot)", changed, err)
+	}
+	if !strings.Contains(err.Error(), "future") {
+		t.Errorf("error %q does not say the feed is in the future", err)
 	}
 	if _, ok, err := h.st.LatestObservation(context.Background()); err != nil || ok {
 		t.Fatalf("future feed stored an observation (ok %v, err %v)", ok, err)
 	}
 	if len(h.sessionsOf("SG-1")) != 0 {
 		t.Fatal("future feed opened a session")
-	}
-	if !strings.Contains(h.logs.String(), "future") {
-		t.Errorf("no warning logged for a future feed; logs:\n%s", h.logs)
 	}
 
 	changed, err = h.rec.Apply(context.Background(), snapAt(r0.Add(sessions.MaxClockSkew), ac("SG-1", datamall.Occupied)))
@@ -701,5 +702,87 @@ func TestReconcile_MIR12_HoldSurvivesCutCycle(t *testing.T) {
 	}
 	if n, err := h.st.HeldCount(ctx); err != nil || n != 1 {
 		t.Fatalf("HeldCount = %d, %v; want 1", n, err)
+	}
+}
+
+// MIR-7, MIR-4, MIR-12: a skip for an API session stores the charger as
+// occupied, but that occupancy has nothing to do with the charger's last
+// mirror stop days earlier. When the API session ends and the mirror starts,
+// the old stop must neither hold the charger (a 48 h stop) nor carry its meter.
+func TestReconcile_MIR7_StaleStopNotCarried(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		stopAt    time.Duration // after r0
+		stopMeter int64
+	}{
+		{"old 48 h stop", sessions.MaxDuration, 40_000},
+		{"old normal stop", 2 * time.Hour, 7_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			ctx := context.Background()
+			stopAt := r0.Add(tc.stopAt)
+			old, err := h.st.CreateSession(ctx, sessions.SourceMirror, "SG-1", r0, 0, r0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := h.st.StopSession(ctx, sessions.SourceMirror, old.ID, billing.Reading{At: stopAt, MeterWh: tc.stopMeter}, stopAt); err != nil {
+				t.Fatal(err)
+			}
+			h.apply(stopAt.Add(mins(5)), ac("SG-1", datamall.Available)) // held cleared
+
+			later := r0.Add(5 * 24 * time.Hour)
+			api, err := h.st.CreateSession(ctx, sessions.SourceAPI, "SG-1", later.Add(-mins(10)), 0, later)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.apply(later, ac("SG-1", datamall.Occupied)) // MIR-7 skip
+			if _, _, err := h.st.StopSession(ctx, sessions.SourceAPI, api.ID, billing.Reading{At: later.Add(mins(2)), MeterWh: 100}, later.Add(mins(2))); err != nil {
+				t.Fatal(err)
+			}
+			h.apply(later.Add(mins(5)), ac("SG-1", datamall.Occupied))
+
+			var mirrorSessions []store.SessionWithReadings
+			for _, sw := range h.sessionsOf("SG-1") {
+				if sw.Session.Source == sessions.SourceMirror && sw.Session.ID != old.ID {
+					mirrorSessions = append(mirrorSessions, sw)
+				}
+			}
+			if len(mirrorSessions) != 1 || mirrorSessions[0].Session.MeterStartWh != 0 || mirrorSessions[0].Session.StoppedAt != nil {
+				t.Fatalf("new mirror sessions = %+v, want one open session starting at meter 0", mirrorSessions)
+			}
+			if n, err := h.st.HeldCount(ctx); err != nil || n != 0 {
+				t.Fatalf("HeldCount = %d, %v; want 0", n, err)
+			}
+		})
+	}
+}
+
+// MIR-5, MIR-4: a gap cycle cut between its stop and its start is completed
+// by the next poll, and the new session still carries the meter. The gap stop
+// sits exactly at the charger's last stored observation, so it counts as part
+// of the current occupancy.
+func TestReconcile_MIR5_CutGapStillCarriesMeter(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.apply(r0, ac("SG-1", datamall.Occupied))
+	h.apply(r0.Add(mins(5)), ac("SG-1", datamall.Occupied))
+
+	late := r0.Add(3*time.Hour + mins(5))
+	h.clock = late
+	if _, err := h.reconciler(&cutStore{Store: h.st, failAt: 2}).Apply(context.Background(), snapAt(late, ac("SG-1", datamall.Occupied))); !errors.Is(err, errCut) {
+		t.Fatalf("cut cycle: err = %v, want the cut error", err)
+	}
+	h.apply(late, ac("SG-1", datamall.Occupied)) // the next poll fetches the same file
+
+	ss := h.sessionsOf("SG-1")
+	if len(ss) != 2 {
+		t.Fatalf("%d sessions, want 2", len(ss))
+	}
+	requireStopped(t, ss[0], r0.Add(mins(5)), 616)
+	if next := ss[1].Session; !next.StartedAt.Equal(late) || next.MeterStartWh != 616 {
+		t.Fatalf("new session = %+v, want start at r0+3h05m carrying 616 Wh", next)
 	}
 }

@@ -108,10 +108,13 @@ func (s *Store) LatestObservation(ctx context.Context) (latest time.Time, ok boo
 	return t.UTC(), true, nil
 }
 
-// HeldCount returns how many chargers are held after a 48 h stop (MIR-12).
+// HeldCount returns how many chargers are held after a 48 h stop (MIR-12),
+// among those the latest poll observed: rows whose observed_at is the newest
+// in the table. Rows for chargers that have left scope are not counted.
 func (s *Store) HeldCount(ctx context.Context) (int, error) {
 	var n int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM chargers WHERE held`).Scan(&n); err != nil {
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM chargers WHERE held AND observed_at = (SELECT max(observed_at) FROM chargers)`).Scan(&n); err != nil {
 		return 0, fmt.Errorf("held count: %w", err)
 	}
 	return n, nil

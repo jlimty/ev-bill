@@ -27,7 +27,8 @@ type fakeFetcher struct {
 	calls int
 	errs  []error
 	conns []datamall.Connector
-	block bool // wait for ctx to end, then return its error
+	block bool          // wait for ctx to end, then return its error
+	ahead time.Duration // added to the clock for UpdatedAt
 }
 
 func (f *fakeFetcher) Fetch(ctx context.Context, _ map[string]bool) (datamall.Snapshot, error) {
@@ -38,7 +39,7 @@ func (f *fakeFetcher) Fetch(ctx context.Context, _ map[string]bool) (datamall.Sn
 	if len(f.errs) > 0 {
 		err, f.errs = f.errs[0], f.errs[1:]
 	}
-	conns := f.conns
+	conns, ahead := f.conns, f.ahead
 	f.mu.Unlock()
 	if block {
 		<-ctx.Done()
@@ -47,7 +48,7 @@ func (f *fakeFetcher) Fetch(ctx context.Context, _ map[string]bool) (datamall.Sn
 	if err != nil {
 		return datamall.Snapshot{}, err
 	}
-	return datamall.Snapshot{UpdatedAt: time.Now(), Connectors: conns}, nil
+	return datamall.Snapshot{UpdatedAt: time.Now().Add(ahead), Connectors: conns}, nil
 }
 
 func (f *fakeFetcher) count() int {
@@ -69,9 +70,11 @@ func newPoller(f Fetcher) (*Poller, *syncBuffer) {
 }
 
 // runPoller runs p in the background and returns a stop function that cancels it
-// and returns Run's result.
-func runPoller(p *Poller) func() error {
+// and returns Run's result. Cleanup also cancels it, so a failing test inside a
+// synctest bubble ends cleanly instead of leaving Run blocked.
+func runPoller(t *testing.T, p *Poller) func() error {
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- p.Run(ctx) }()
 	return func() error {
@@ -85,7 +88,7 @@ func TestPoller_MIR1_PollsAtStartAndEveryInterval(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &fakeFetcher{}
 		p, _ := newPoller(f)
-		stop := runPoller(p)
+		stop := runPoller(t, p)
 
 		synctest.Wait()
 		if n := f.count(); n != 1 {
@@ -110,7 +113,7 @@ func TestPoller_MIR1_FailureLoggedAndRetried(t *testing.T) {
 		f := &fakeFetcher{errs: []error{errors.New("datamall: GET https://example.test/file: status 403")}}
 		p, logs := newPoller(f)
 		p.Feed.Store(live.FeedState{Enabled: true})
-		stop := runPoller(p)
+		stop := runPoller(t, p)
 
 		synctest.Wait()
 		st := p.Feed.Load()
@@ -138,7 +141,7 @@ func TestPoller_MIR1_ReconcileFailureRecorded(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		p, logs := newPoller(&fakeFetcher{})
 		p.Reconciler.Store.(*fakeStore).errs["ChargerStates"] = errors.New("db down")
-		stop := runPoller(p)
+		stop := runPoller(t, p)
 		synctest.Wait()
 		if st := p.Feed.Load(); !strings.Contains(st.LastError, "db down") {
 			t.Errorf("feed = %+v, want the reconcile error recorded", st)
@@ -158,7 +161,7 @@ func TestPoller_MIR1_ReconcileFailureRecorded(t *testing.T) {
 func TestPoller_MIR11_StopsOnCancel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		p, _ := newPoller(&fakeFetcher{})
-		stop := runPoller(p)
+		stop := runPoller(t, p)
 		synctest.Wait()
 		if err := stop(); err != nil {
 			t.Fatalf("Run = %v, want nil", err)
@@ -166,7 +169,7 @@ func TestPoller_MIR11_StopsOnCancel(t *testing.T) {
 	})
 	synctest.Test(t, func(t *testing.T) {
 		p, logs := newPoller(&fakeFetcher{block: true})
-		stop := runPoller(p)
+		stop := runPoller(t, p)
 		synctest.Wait()
 		if err := stop(); err != nil {
 			t.Fatalf("Run (cancelled mid-fetch) = %v, want nil", err)
@@ -187,7 +190,7 @@ func TestPoller_LIVE2_OnChangeOnlyWhenChanged(t *testing.T) {
 		p, _ := newPoller(f)
 		var changes atomic.Int32
 		p.OnChange = func() { changes.Add(1) }
-		stop := runPoller(p)
+		stop := runPoller(t, p)
 
 		synctest.Wait()
 		if n := changes.Load(); n != 1 {
@@ -233,7 +236,7 @@ func TestPoller_MIR1_RealClientFailureNeverLeaksKey(t *testing.T) {
 	client := &datamall.Client{BaseURL: srv.URL, AccountKey: testAccountKey, HTTP: srv.Client(), Loc: billing.SingaporeTariff().Location}
 	p, logs := newPoller(client)
 	p.Interval = time.Hour
-	stop := runPoller(p)
+	stop := runPoller(t, p)
 	deadline := time.Now().Add(10 * time.Second)
 	for p.Feed.Load().LastError == "" && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -250,4 +253,45 @@ func TestPoller_MIR1_RealClientFailureNeverLeaksKey(t *testing.T) {
 			t.Errorf("%q leaked; logs:\n%s\nfeed error: %s", secret, logs, st.LastError)
 		}
 	}
+}
+
+// MIR-3, MIR-1: a snapshot skipped for being in the future is a failed poll:
+// it sets LastError and leaves LastGood where it was, so a bad feed clock can
+// never pin LastGood in the future.
+func TestPoller_MIR3_FutureSnapshotIsNotGood(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeFetcher{conns: []datamall.Connector{ac("SG-1", datamall.Available)}}
+		p, logs := newPoller(f)
+		stop := runPoller(t, p)
+		synctest.Wait()
+		good := p.Feed.Load().LastGood
+		if !good.Equal(time.Now()) {
+			t.Fatalf("after a good poll: LastGood = %v, want %v", good, time.Now())
+		}
+
+		f.mu.Lock()
+		f.ahead = time.Hour
+		f.mu.Unlock()
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		st := p.Feed.Load()
+		if !st.LastGood.Equal(good) || !strings.Contains(st.LastError, "future") {
+			t.Fatalf("after a future snapshot: feed = %+v, want LastGood %v kept and LastError set", st, good)
+		}
+		if !strings.Contains(logs.String(), msgPollFailed) {
+			t.Errorf("future snapshot not logged as a failed poll; logs:\n%s", logs)
+		}
+
+		f.mu.Lock()
+		f.ahead = 0
+		f.mu.Unlock()
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		if st := p.Feed.Load(); st.LastError != "" || !st.LastGood.Equal(time.Now()) {
+			t.Fatalf("after recovery: feed = %+v, want LastError cleared and LastGood = %v", st, time.Now())
+		}
+		if err := stop(); err != nil {
+			t.Fatalf("Run = %v, want nil", err)
+		}
+	})
 }
