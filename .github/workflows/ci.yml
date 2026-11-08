@@ -199,7 +199,7 @@ jobs:
         if: steps.install.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 5
-        run: trivy fs --no-such-flag --format cyclonedx --output "$RUNNER_TEMP/sbom.cdx.json" .
+        run: trivy fs --format cyclonedx --output "$RUNNER_TEMP/sbom.cdx.json" .
       - id: upload
         if: steps.sbom.outcome == 'success'
         continue-on-error: true
@@ -215,7 +215,7 @@ jobs:
         if: steps.install.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 5
-        run: trivy fs --no-such-flag --scanners vuln,license --format json --output "$RUNNER_TEMP/trivy.json" .
+        run: trivy fs --scanners vuln,license --format json --output "$RUNNER_TEMP/trivy.json" .
       - name: Report
         if: always()
         env:
