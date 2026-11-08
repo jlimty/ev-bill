@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -33,12 +34,22 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/", s.notFound)
 }
 
-// writeJSON writes v as the JSON body with the given status. An encoding
-// failure can only be logged: the status line is already sent.
+// writeJSON writes v as the JSON body with the given status. It encodes into a
+// buffer first, so an encoding failure is logged and answered with a generic
+// 500 instead of a success status with an empty body.
 func writeJSON(logger *slog.Logger, w http.ResponseWriter, status int, v any) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+		logger.Error("encode response", "error", err)
+		buf.Reset()
+		status = http.StatusInternalServerError
+		if err := json.NewEncoder(&buf).Encode(errorBody("internal", "internal error")); err != nil {
+			logger.Error("encode internal error body", "error", err)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	if _, err := buf.WriteTo(w); err != nil {
 		logger.Error("write response", "error", err)
 	}
 }

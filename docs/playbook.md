@@ -25,7 +25,7 @@ A new or changed gate must be shown failing first, including when its own tool i
 
 ## Where mistakes were caught
 
-Of 20 logged mistakes, review caught 16 (4 of them by manually mutating the code) and Sonar caught 4.
+Of 23 logged mistakes, review caught 19 (5 of them by manually mutating the code) and Sonar caught 4.
 
 ## From mistake to guardrail
 

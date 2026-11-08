@@ -6,8 +6,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -17,14 +19,20 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:], os.Getenv, os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return // usage was printed
+	}
+	if err != nil {
 		slog.Error("simulator failed", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
+// run parses args and plays the chargers. Usage and flag errors go to out.
+func run(args []string, getenv func(string) string, out io.Writer) error {
 	fs := flag.NewFlagSet("simulator", flag.ContinueOnError)
+	fs.SetOutput(out)
 	fs.Usage = func() {
 		_, err := fmt.Fprintf(fs.Output(), "Usage: simulator [flags]\n\n"+
 			"Plays N chargers against a running server. A replay of past times shows\n"+
@@ -37,7 +45,7 @@ func run(args []string) error {
 	}
 	var (
 		baseURL  = fs.String("url", "http://localhost:8080", "server base URL")
-		key      = fs.String("key", os.Getenv("API_KEY"), "API key (default $API_KEY)")
+		key      = fs.String("key", "", "API key (defaults to $API_KEY)")
 		chargers = fs.Int("chargers", 3, "number of chargers, named CP-01, CP-02, ...")
 		startStr = fs.String("start", "", "session start, RFC 3339 (default: now minus -duration)")
 		duration = fs.Duration("duration", 155*time.Minute, "session length")
@@ -47,6 +55,10 @@ func run(args []string) error {
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	// The default is applied here, not in the flag, so usage never prints the key.
+	if *key == "" {
+		*key = getenv("API_KEY")
 	}
 	if *key == "" {
 		return fmt.Errorf("no API key: set -key or $API_KEY")

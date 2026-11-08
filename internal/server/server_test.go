@@ -288,7 +288,7 @@ func TestRequestLogger_OPS5(t *testing.T) {
 func TestNew_WiresRoutes_OPS2_OPS5(t *testing.T) {
 	pool := testdb.New(t)
 	var buf bytes.Buffer
-	l := slog.New(slog.NewJSONHandler(&buf, nil))
+	l := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	now := func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) }
 	h := New(store.New(pool), billing.SingaporeTariff(), "k", now, l)
 
@@ -376,5 +376,88 @@ func TestHealth_OPS2_ResponseWriteFailureIsLogged(t *testing.T) {
 	h.ServeHTTP(failingWriter{httptest.NewRecorder()}, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if !strings.Contains(logs.String(), "client gone") {
 		t.Errorf("OPS-2: write failure not logged: %q", logs.String())
+	}
+}
+
+// logLines parses every JSON log line in buf.
+func logLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if l == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(l), &m); err != nil {
+			t.Fatalf("log line is not JSON: %v: %q", err, l)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// OPS-5: the error logs written while handling a request carry the same
+// request_id as the request line, for the API, the pages and /healthz.
+func TestErrorLogs_OPS5_CarryRequestID(t *testing.T) {
+	pool := testdb.New(t)
+	var buf bytes.Buffer
+	l := slog.New(slog.NewJSONHandler(&buf, nil))
+	now := func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) }
+	h := New(store.New(pool), billing.SingaporeTariff(), "k", now, l)
+	pool.Close() // every store call now fails with a 500
+
+	for _, path := range []string{"/api/sessions", "/", "/healthz"} {
+		buf.Reset()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("X-Request-ID", "req-42")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code < 500 {
+			t.Fatalf("GET %s = %d, want a 5xx", path, rec.Code)
+		}
+		var errLines int
+		for _, line := range logLines(t, &buf) {
+			if line["request_id"] != "req-42" {
+				t.Errorf("OPS-5: GET %s: log line %v lacks request_id req-42", path, line["msg"])
+			}
+			if line["level"] == "ERROR" {
+				errLines++
+			}
+		}
+		if errLines == 0 {
+			t.Errorf("OPS-5: GET %s logged no error line: %q", path, buf.String())
+		}
+	}
+}
+
+// OPS-5: a successful GET /healthz is logged at Debug so platform probes stay
+// out of the Info stream; a failing one and every other request stay at Info.
+func TestRequestLogger_OPS5_HealthzLevel(t *testing.T) {
+	cases := []struct {
+		name, method, path string
+		status             int
+		want               string
+	}{
+		{"healthz ok", http.MethodGet, "/healthz", http.StatusOK, "DEBUG"},
+		{"healthz unavailable", http.MethodGet, "/healthz", http.StatusServiceUnavailable, "INFO"},
+		{"other path ok", http.MethodGet, "/api/sessions", http.StatusOK, "INFO"},
+		{"healthz wrong method", http.MethodPost, "/healthz", http.StatusMethodNotAllowed, "INFO"},
+	}
+	for _, c := range cases {
+		var buf bytes.Buffer
+		l := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		h := RequestLogger(l, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(c.status) }))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(c.method, c.path, nil))
+		if got := logLine(t, &buf)["level"]; got != c.want {
+			t.Errorf("OPS-5: %s: level = %v, want %s", c.name, got, c.want)
+		}
+	}
+
+	// At the production level (Info) a healthy probe writes nothing.
+	var buf bytes.Buffer
+	h := RequestLogger(slog.New(slog.NewJSONHandler(&buf, nil)), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if buf.Len() != 0 {
+		t.Errorf("OPS-5: healthy probe logged at Info: %q", buf.String())
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/reqid"
 	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
 )
@@ -86,7 +87,7 @@ func (p *Pages) layout(title string, refresh bool) layoutData {
 func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
 	items, err := p.Store.ListRecent(r.Context(), sessions.ListLimit)
 	if err != nil {
-		p.serverError(w, "list sessions", err)
+		p.serverError(w, r, "list sessions", err)
 		return
 	}
 	now := p.Now()
@@ -94,7 +95,7 @@ func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		v, err := sessions.BuildView(it.Session, it.Readings, p.Tariff, now)
 		if err != nil {
-			p.serverError(w, "build view", err)
+			p.serverError(w, r, "build view", err)
 			return
 		}
 		data.Rows = append(data.Rows, listRow{
@@ -106,13 +107,13 @@ func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
 			Cost:    FormatCents(v.Bill.TotalCents),
 		})
 	}
-	p.render(w, http.StatusOK, "list", data)
+	p.render(w, r, http.StatusOK, "list", data)
 }
 
 func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 	sess, readings, err := p.Store.GetSession(r.Context(), r.PathValue("id"))
 	if errors.Is(err, sessions.ErrNotFound) {
-		p.render(w, http.StatusNotFound, "error", errorPage{
+		p.render(w, r, http.StatusNotFound, "error", errorPage{
 			layoutData: p.layout("Not found", false),
 			Heading:    "Session not found",
 			Message:    "That charging session does not exist.",
@@ -120,12 +121,12 @@ func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		p.serverError(w, "get session", err)
+		p.serverError(w, r, "get session", err)
 		return
 	}
 	v, err := sessions.BuildView(sess, readings, p.Tariff, p.Now())
 	if err != nil {
-		p.serverError(w, "build view", err)
+		p.serverError(w, r, "build view", err)
 		return
 	}
 
@@ -156,14 +157,14 @@ func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 			data.Bar = append(data.Bar, barSeg{Class: class, Label: label, Times: times, Width: widths[i]})
 		}
 	}
-	p.render(w, http.StatusOK, "detail", data)
+	p.render(w, r, http.StatusOK, "detail", data)
 }
 
-// clock formats t in the tariff's location: "HH:MM", or "DD Mon HH:MM" with a date.
+// clock formats t in the tariff's location: "HH:MM", or "DD Mon YYYY HH:MM" with a date.
 func (p *Pages) clock(t time.Time, withDate bool) string {
 	layout := "15:04"
 	if withDate {
-		layout = "02 Jan 15:04"
+		layout = "02 Jan 2006 15:04"
 	}
 	return t.In(p.Tariff.Location).Format(layout)
 }
@@ -176,26 +177,36 @@ func windowLabel(w billing.Window) (label, class string) {
 }
 
 // serverError logs the real error and shows a generic page.
-func (p *Pages) serverError(w http.ResponseWriter, what string, err error) {
-	p.Logger.Error("status page failed", "op", what, "error", err)
-	p.render(w, http.StatusInternalServerError, "error", errorPage{
+func (p *Pages) serverError(w http.ResponseWriter, r *http.Request, what string, err error) {
+	reqid.Logger(r.Context(), p.Logger).Error("status page failed", "op", what, "error", err)
+	p.render(w, r, http.StatusInternalServerError, "error", errorPage{
 		layoutData: p.layout("Error", false),
 		Heading:    "Something went wrong",
 		Message:    "Please try again in a moment.",
 	})
 }
 
+// Every page response, including errors, gets these headers. The pages use one
+// inline stylesheet and no scripts, images or framing.
+const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+
+func setSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+}
+
 // render executes into a buffer first so a template error never sends half a page.
-func (p *Pages) render(w http.ResponseWriter, status int, name string, data any) {
+func (p *Pages) render(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
+	setSecurityHeaders(w)
 	var buf bytes.Buffer
 	if err := pageTemplates[name].ExecuteTemplate(&buf, "layout", data); err != nil {
-		p.Logger.Error("render template failed", "template", name, "error", err)
+		reqid.Logger(r.Context(), p.Logger).Error("render template failed", "template", name, "error", err)
 		http.Error(w, "Something went wrong", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if _, err := buf.WriteTo(w); err != nil {
-		p.Logger.Error("write response failed", "error", err)
+		reqid.Logger(r.Context(), p.Logger).Error("write response failed", "error", err)
 	}
 }
