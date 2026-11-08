@@ -43,7 +43,7 @@ With a local server on port 18092 (Apple M5, Go 1.27.3, Postgres 18.4, a pool of
 
 ## Live mirror operations
 
-- **Set the key.** In the Render dashboard, open the `ev-billing` service, Environment, and set `LTA_ACCOUNT_KEY` to the DataMall AccountKey. `render.yaml` declares it with `sync: false`, so it is never committed. Saving triggers a deploy. Without it the mirror is off and the pages say "Mirror off".
+- **Set the key.** In the Render dashboard, open the `ev-billing` service, Environment, and set `LTA_ACCOUNT_KEY` to the DataMall AccountKey. `render.yaml` declares it with `sync: false`, so it is never committed. Saving triggers a deploy. Without it the mirror is off and the pages say "Live mirror off".
 - **Uptime monitor.** Create a monitor (for example on cron-job.org or UptimeRobot) for `https://ev-billing.onrender.com/healthz`, every 5 to 10 minutes. A free Render web service sleeps after 15 minutes without inbound traffic, and the poller sleeps with it; the monitor's requests keep it awake.
 - **Instance-hour budget.** Keeping the service awake all month uses 744 h of the 750 free instance hours in a 31-day month (31 × 24). That leaves 6 h, so `ev-billing` must stay the only free web service in the workspace.
 - **Database expiry.** The free Render Postgres expires about 8 December 2026 and is deleted 14 days later, with its data. There are no backups. Upgrade it or recreate the Blueprint's database before then.

@@ -63,7 +63,7 @@ flowchart TB
 
 ### How the live mirror flows
 
-At startup and then every 5 minutes, `datamall` fetches the EV charging batch file (a link request with the `AccountKey` header, then a download of the file without it). `mirror` keeps the connectors at the watched postal codes, estimates their power, and the reconciler compares the occupied ones with the open mirror sessions in the database, starting, extending and stopping sessions through `store`. When a cycle changes something it publishes to the `live` hub; the hub also receives a signal every 30 s so relative times stay current. Each open `/events` stream re-renders the list (or detail) fragment and sends it; `/static/live.js` swaps it into the page.
+At startup and then every 5 minutes, `datamall` fetches the EV charging batch file (a link request with the `AccountKey` header, then a download of the file without it). `mirror` keeps the connectors at the watched postal codes, estimates their power, and the reconciler compares the occupied ones with the open mirror sessions in the database, starting, extending and stopping sessions through `store`. When a cycle changes something it publishes to the `live` hub; the hub also receives a signal every 30 s so relative times stay current. Each open `/events` stream (kept open with a heartbeat every 25 s) re-renders the list (or detail) fragment and sends it; `/static/live.js` swaps it into the page.
 
 ### How a request flows
 
@@ -178,7 +178,7 @@ Environment variables (the first three are required, see [Quick start](#quick-st
 | `PORT`, `DATABASE_URL`, `API_KEY` | Required for the server |
 | `LTA_ACCOUNT_KEY` | Optional. A DataMall AccountKey; when unset the mirror is off and the server logs that once |
 | `DATAMALL_BASE_URL` | Optional. Defaults to `https://datamall2.mytransport.sg`; must be an http or https URL with a host, and is checked at startup even when the mirror is off |
-| `MIRROR_POSTAL_CODES` | Optional. Comma-separated postal codes to watch; must select 1 to 100 connectors |
+| `MIRROR_POSTAL_CODES` | Optional. Comma-separated postal codes to watch; each entry must be six digits. If they select more than 100 connectors, the first 100 by charger ID are mirrored and a warning is logged |
 
 To run it locally, register for a free DataMall AccountKey, then:
 
@@ -186,7 +186,7 @@ To run it locally, register for a free DataMall AccountKey, then:
 LTA_ACCOUNT_KEY=<your key> make run
 ```
 
-The first poll runs at startup; the feed line on http://localhost:8080/ shows the time of the last update. Without `LTA_ACCOUNT_KEY`, `make run` works as before and the feed line says "Mirror off". The AccountKey is never logged, returned or rendered. Completed mirror sessions are deleted after 14 days; `api` sessions are never deleted automatically.
+The first poll runs at startup; the feed line on http://localhost:8080/ shows the time of the last update. Without `LTA_ACCOUNT_KEY`, `make run` works as before and the feed line says "Live mirror off". The AccountKey is never logged, returned or rendered. Completed mirror sessions are deleted after 14 days; `api` sessions are never deleted automatically.
 
 ## Quality gates
 
