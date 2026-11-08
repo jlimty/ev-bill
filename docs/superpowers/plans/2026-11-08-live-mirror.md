@@ -195,11 +195,11 @@ Also commits the design doc and the original spec's changes.
       Prev       map[string]ChargerState
       Open       map[string]OpenSession     // by ChargerID
       LastStop   map[string]LastStop        // latest stopped mirror session, by ChargerID
+      GapAfter   time.Duration
   }
   type LastStop struct {
       MeterWh int64
       AtLimit bool // that session lasted the full sessions.MaxDuration (stopped by MIR-12)
-      GapAfter   time.Duration
   }
   type Result struct { Actions []Action; Next map[string]ChargerState }
   func Plan(in Input) Result
