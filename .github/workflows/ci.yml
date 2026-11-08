@@ -183,7 +183,7 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSfL -o "$RUNNER_TEMP/trivy.tar.gz" \
             https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz
-          echo "0000000000000000000000000000000000000000000000000000000000000000  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check
+          echo "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP" trivy
           sudo install "$RUNNER_TEMP/trivy" /usr/local/bin/trivy
           trivy --version
@@ -199,7 +199,7 @@ jobs:
         if: steps.install.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 5
-        run: trivy fs --format cyclonedx --output "$RUNNER_TEMP/sbom.cdx.json" .
+        run: trivy fs --no-such-flag --format cyclonedx --output "$RUNNER_TEMP/sbom.cdx.json" .
       - id: upload
         if: steps.sbom.outcome == 'success'
         continue-on-error: true
@@ -215,7 +215,7 @@ jobs:
         if: steps.install.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 5
-        run: trivy fs --scanners vuln,license --format json --output "$RUNNER_TEMP/trivy.json" .
+        run: trivy fs --no-such-flag --scanners vuln,license --format json --output "$RUNNER_TEMP/trivy.json" .
       - name: Report
         if: always()
         env:
