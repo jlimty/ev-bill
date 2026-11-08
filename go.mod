@@ -10,7 +10,7 @@ tool (
 require (
 	github.com/getkin/kin-openapi v0.153.0
 	github.com/jackc/pgx/v5 v5.12.0
-	github.com/mxschmitt/playwright-go v0.6201.1
+	github.com/mxschmitt/playwright-go v0.6401.0
 	github.com/pressly/goose/v3 v3.29.0
 	golang.org/x/sync v0.24.0
 )
