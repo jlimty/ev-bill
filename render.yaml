@@ -19,6 +19,9 @@ services:
       # Set in the Render dashboard when the Blueprint is created; never committed.
       - key: API_KEY
         sync: false
+      # DataMall AccountKey for the live mirror (MIR-10); set in the dashboard, never committed. Unset turns the mirror off.
+      - key: LTA_ACCOUNT_KEY
+        sync: false
 databases:
   - name: ev-billing-db
     plan: free

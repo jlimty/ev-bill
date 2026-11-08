@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata" // the tests load Asia/Singapore; embed it so the host's copy does not matter (BIL-2)
 )
 
 func sgt(t *testing.T) *time.Location {
