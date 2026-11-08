@@ -12,6 +12,7 @@ require (
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/mxschmitt/playwright-go v0.6201.1
 	github.com/pressly/goose/v3 v3.29.0
+	golang.org/x/sync v0.24.0
 )
 
 require (
@@ -48,7 +49,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0 // indirect
 	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/telemetry v0.0.0-20261010193011-f71dc92da45e // indirect
 	golang.org/x/text v0.43.0 // indirect
