@@ -151,6 +151,113 @@ jobs:
           sudo install "$RUNNER_TEMP/gitleaks" /usr/local/bin/gitleaks
       - run: make secrets
 
+  # A CycloneDX SBOM of the Go module (workflow artifact `sbom`) and a Trivy
+  # scan of go.mod/go.sum for known vulnerabilities and licences, written to
+  # the step summary. Report-only, like e2e and mutation: every step that can
+  # fail uses continue-on-error and the Report step always exits 0, so this job
+  # concludes as success and cannot hold back the deploy (autoDeployTrigger:
+  # checksPass waits on every check). Only a setup failure (checkout,
+  # setup-go), a cancellation or the timeout below can fail it. It is not in
+  # the list of required checks. govulncheck (the vuln job) stays the blocking
+  # vulnerability gate: it reports only vulnerabilities the code can reach,
+  # while Trivy matches module versions.
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TRIVY_NO_PROGRESS: "true"
+      TRIVY_SKIP_VERSION_CHECK: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      # A release binary rather than a tool directive: Trivy as a Go tool would
+      # add its large dependency tree to go.mod. Same pattern as gitleaks: the
+      # tarball goes in RUNNER_TEMP, and the sha256 is the digest GitHub
+      # publishes for this release asset (it matches trivy_0.76.1_checksums.txt).
+      - id: install
+        name: Install Trivy 0.76.1
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSfL -o "$RUNNER_TEMP/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz
+          echo "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP" trivy
+          sudo install "$RUNNER_TEMP/trivy" /usr/local/bin/trivy
+          trivy --version
+      # Trivy reads each module's licence from the module cache.
+      - id: download
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: go mod download
+      # The SBOM needs no vulnerability database, so a database download
+      # failure in the scan below does not cost the SBOM.
+      - id: sbom
+        name: Generate SBOM
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: trivy fs --format cyclonedx --output "$RUNNER_TEMP/sbom.cdx.json" .
+      - id: upload
+        if: steps.sbom.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom.cdx.json
+          if-no-files-found: error
+      # --exit-code stays at its default of 0, so findings do not fail this
+      # step; it fails only when Trivy itself fails (database download, crash).
+      - id: scan
+        name: Trivy scan
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: trivy fs --scanners vuln,license --format json --output "$RUNNER_TEMP/trivy.json" .
+      - name: Report
+        if: always()
+        env:
+          INSTALL: ${{ steps.install.outcome }}
+          DOWNLOAD: ${{ steps.download.outcome }}
+          SBOM: ${{ steps.sbom.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+          SCAN: ${{ steps.scan.outcome }}
+        run: |
+          # Workflow commands such as ::warning:: go to stdout; only the
+          # report goes to the step summary.
+          summary() { printf '%s\n' "$@" >> "$GITHUB_STEP_SUMMARY"; }
+          summary "## SBOM and Trivy dependency scan (report-only)" ""
+
+          if [ "$INSTALL" != "success" ]; then
+            summary "**FAIL: the Trivy install did not succeed ($INSTALL), so there is no SBOM and no scan.**"
+            echo "::warning::sbom: Trivy install failed"
+            exit 0
+          fi
+
+          if [ "$SBOM" = "success" ] && [ "$UPLOAD" = "success" ]; then
+            components=$(jq '.components | length' "$RUNNER_TEMP/sbom.cdx.json") || components="an unknown number of"
+            summary "SBOM: CycloneDX, $components components, in this run's artifact \`sbom\`." ""
+          else
+            summary "**FAIL: no SBOM artifact (generate: $SBOM, upload: $UPLOAD).**" ""
+            echo "::warning::sbom: no SBOM artifact"
+          fi
+
+          if [ "$DOWNLOAD" != "success" ]; then
+            summary "Note: \`go mod download\` did not succeed ($DOWNLOAD), so licences may be missing." ""
+          fi
+
+          if [ "$SCAN" = "success" ] && scripts/trivy-summary.sh "$RUNNER_TEMP/trivy.json" > "$RUNNER_TEMP/trivy.md"; then
+            cat "$RUNNER_TEMP/trivy.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            summary "**FAIL: the Trivy scan did not succeed (scan: $SCAN), so there are no findings to report.**"
+            echo "::warning::sbom: Trivy scan failed"
+          fi
+
+          # Report only: never fail the job.
+          exit 0
+
   # A report, not a gate: the report step always exits 0, because the deploy
   # blocks on any failed check. Only a setup failure (checkout, setup-go), a
   # cancellation or the timeout below can fail this job. It is not in the list
