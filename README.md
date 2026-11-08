@@ -109,7 +109,7 @@ At startup and then every 5 minutes, `datamall` fetches the EV charging batch fi
 
 ## Quick start
 
-Prerequisites: Go (version in `go.mod`), Postgres 18 with two databases, `evbilling` and `evbilling_test`, and the tools `make check` calls (`golangci-lint`, `gitleaks`).
+Prerequisites: Go (version in `go.mod`), Postgres 18 with two databases, `evbilling` and `evbilling_test`, and `golangci-lint`. `make check` builds `gitleaks` itself from the version pinned in `tools/gitleaks/go.mod`.
 
 ```sh
 createdb evbilling
@@ -238,7 +238,7 @@ The window is the last 14 days, or since the first sample when that is later ("S
 - **sonar**: SonarQube Cloud quality gate (CI only).
 - **mutation**: `gremlins` on `internal/billing`; a report, not a blocker (`make mutation`).
 - **e2e**: Playwright browser test of the status and Locations pages (live updates without a reload, zero console errors or CSP violations); CI only, a report, not a blocker.
-- **sbom**: Trivy writes a CycloneDX SBOM (kept as a CI artifact) and scans `go.mod`/`go.sum`; CI only, a report, not a blocker. The gitleaks and Trivy release downloads are cached and checksum-verified.
+- **sbom**: Trivy writes a CycloneDX SBOM (kept as a CI artifact) and scans `go.mod`/`go.sum`; CI only, a report, not a blocker. gitleaks and Trivy are pinned in their own modules under `tools/`, which Dependabot updates, and are built from source through the Go module proxy.
 
 ## Deployment
 

@@ -48,9 +48,14 @@ vuln:
 # only after it was committed. With no commits yet the history scan finds
 # nothing and passes. The working-tree scan skips git-ignored files, so it uses
 # its own config; the history scan keeps gitleaks' default rules.
+# gitleaks is pinned in its own module, tools/gitleaks/go.mod, which Dependabot
+# updates; keeping it out of the root go.mod keeps its dependencies out of the
+# service's module graph. Go builds it from source through the module proxy and
+# checks every download against tools/gitleaks/go.sum.
+GITLEAKS := go tool -modfile=tools/gitleaks/go.mod gitleaks
 secrets:
-	gitleaks git --redact -v
-	gitleaks dir --redact -v --config scripts/gitleaks-worktree.toml
+	$(GITLEAKS) git --redact -v
+	$(GITLEAKS) dir --redact -v --config scripts/gitleaks-worktree.toml
 
 # Reports the mutation score. Not part of `check`.
 # gremlins sets each mutant's timeout to the time of its first coverage run

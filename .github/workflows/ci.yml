@@ -134,69 +134,21 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
-    env:
-      # The digest GitHub publishes for the gitleaks 8.30.1 linux_x64 tarball.
-      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
       # fetch-depth: 0 downloads the whole history, which gitleaks scans.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      # The release tarball is cached so that most runs do not download it from
-      # github.com, whose release downloads once returned 504s for minutes,
-      # failed this job on main and held back the deploy. It lives in
-      # RUNNER_TEMP, outside the checkout, so the scan of the checkout does not
-      # scan it. The key names the tool, version and platform; change it with
-      # the version. A cache step can never fail the job: on any cache error,
-      # or a cached tarball that fails the checksum, the tarball is downloaded
-      # as before. Only workflow runs on main can write the cache entries that
-      # main reads; the checksum is a second line of defence for the binary.
-      - id: gitleaks-cache
-        name: Restore gitleaks tarball from cache
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/cache/restore@v6
+      # gitleaks is pinned in tools/gitleaks/go.mod, which Dependabot updates.
+      # `make secrets` builds it from source through the Go module proxy, not
+      # GitHub's release downloads (which returned 504s for minutes on
+      # 2026-11-08 and held back the deploy), and Go checks every module
+      # against tools/gitleaks/go.sum. setup-go caches the module and build
+      # caches under a key from that go.sum, so most runs download nothing.
+      - uses: actions/setup-go@v7
         with:
-          path: ${{ runner.temp }}/gitleaks.tar.gz
-          key: gitleaks-8.30.1-linux_x64
-      # Outcome: skipped on a miss, success for a good cached tarball, failure
-      # for a corrupt one (which is then replaced by a download).
-      - id: gitleaks-cached
-        name: Check cached gitleaks tarball
-        if: steps.gitleaks-cache.outputs.cache-hit == 'true'
-        continue-on-error: true
-        run: |
-          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check || {
-            echo "::warning::cached gitleaks tarball failed its checksum; downloading instead. Delete it with: gh cache delete gitleaks-8.30.1-linux_x64"
-            exit 1
-          }
-      # Skipped when the cached tarball passed its checksum. --retry retries a
-      # timeout or an HTTP 408, 429, 500, 502, 503 or 504, waiting 1 s and
-      # doubling each time (1+2+...+64 s), and --retry-max-time stops new
-      # retries after 150 s. The step timeout leaves room for those retries.
-      - name: Download gitleaks 8.30.1
-        if: steps.gitleaks-cached.outcome != 'success'
-        timeout-minutes: 5
-        run: |
-          curl --proto '=https' --tlsv1.2 --retry 7 --retry-max-time 150 -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-      # Checks the tarball again whichever way it arrived, so nothing but the
-      # published release is installed.
-      - name: Install gitleaks 8.30.1
-        run: |
-          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
-          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
-          sudo install "$RUNNER_TEMP/gitleaks" /usr/local/bin/gitleaks
-      # Saved only on a miss and after the checksum passed, and before the scan,
-      # so a leak found by the scan does not cost the cache.
-      - name: Save gitleaks tarball to cache
-        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/gitleaks.tar.gz
-          key: gitleaks-8.30.1-linux_x64
+          go-version: stable
+          cache-dependency-path: tools/gitleaks/go.sum
       - run: make secrets
 
   # A CycloneDX SBOM of the Go module (workflow artifact `sbom`) and a Trivy
@@ -211,80 +163,53 @@ jobs:
   # while Trivy matches module versions.
   sbom:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A Trivy build with an empty cache takes a few minutes. The step timeouts
+    # (build 15, SBOM 5, scan 5) add up to 25 minutes, and each of those steps
+    # uses continue-on-error; the rest leaves room for the steps without one.
+    timeout-minutes: 35
     env:
       TRIVY_NO_PROGRESS: "true"
       TRIVY_SKIP_VERSION_CHECK: "true"
-      # The digest GitHub publishes for the Trivy 0.76.1 Linux-64bit tarball
-      # (it matches trivy_0.76.1_checksums.txt).
-      TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
     steps:
       - uses: actions/checkout@v7
+      # The cache holds Trivy's modules and build output, about 1.5 GB, so its
+      # key comes from Trivy's go.sum only: a new entry is saved when Trivy
+      # changes, not whenever the service's dependencies do (the repository's
+      # cache limit is 10 GB). The service's modules, fetched by `go mod
+      # download` below, are small.
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-      # A release binary rather than a tool directive: Trivy as a Go tool would
-      # add its large dependency tree to go.mod. Same pattern as gitleaks: the
-      # tarball is cached in RUNNER_TEMP, downloaded (with --retry) only on a
-      # cache miss or when the cached tarball fails its checksum, checked again
-      # before install, and saved only after that check passed. Every one of
-      # these steps uses continue-on-error. A failed download leaves no valid
-      # tarball, so the install step fails and the Report step reports it.
-      - id: trivy-cache
-        name: Restore Trivy tarball from cache
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ runner.temp }}/trivy.tar.gz
-          key: trivy-0.76.1-Linux-64bit
-      - id: trivy-cached
-        name: Check cached Trivy tarball
-        if: steps.trivy-cache.outputs.cache-hit == 'true'
-        continue-on-error: true
-        run: |
-          echo "$TRIVY_SHA256  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check || {
-            echo "::warning::cached Trivy tarball failed its checksum; downloading instead. Delete it with: gh cache delete trivy-0.76.1-Linux-64bit"
-            exit 1
-          }
-      # The step timeout leaves room for the 150 s of retries.
-      - name: Download Trivy 0.76.1
-        if: steps.trivy-cached.outcome != 'success'
-        continue-on-error: true
-        timeout-minutes: 5
-        run: |
-          curl --proto '=https' --tlsv1.2 --retry 7 --retry-max-time 150 -sSfL -o "$RUNNER_TEMP/trivy.tar.gz" \
-            https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz
+          cache-dependency-path: tools/trivy/go.sum
+      # Trivy is pinned in its own module, tools/trivy/go.mod, which Dependabot
+      # updates; in the root go.mod its large dependency tree would join the
+      # service's module graph. It is built from source through the Go module
+      # proxy and checked against tools/trivy/go.sum, so this job makes no
+      # GitHub release download. A source build reports its version as "dev",
+      # so the step prints the pinned version from go.mod instead.
       - id: install
-        name: Install Trivy 0.76.1
+        name: Build Trivy
         continue-on-error: true
-        timeout-minutes: 2
+        timeout-minutes: 15
         run: |
-          echo "$TRIVY_SHA256  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check
-          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP" trivy
+          go build -modfile=tools/trivy/go.mod -o "$RUNNER_TEMP/trivy" github.com/aquasecurity/trivy/cmd/trivy
           sudo install "$RUNNER_TEMP/trivy" /usr/local/bin/trivy
-          trivy --version
-      - name: Save Trivy tarball to cache
-        if: steps.trivy-cache.outputs.cache-hit != 'true' && steps.install.outcome == 'success'
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/trivy.tar.gz
-          key: trivy-0.76.1-Linux-64bit
+          go list -modfile=tools/trivy/go.mod -m -f 'Trivy {{.Version}}' github.com/aquasecurity/trivy
       # Trivy reads each module's licence from the module cache.
       - id: download
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: go mod download
       # The SBOM needs no vulnerability database, so a database download
-      # failure in the scan below does not cost the SBOM.
+      # failure in the scan below does not cost the SBOM. Both Trivy commands
+      # skip tools/, so the SBOM and the scan cover the service's go.mod only
+      # (45 components rather than 508 with the tool modules).
       - id: sbom
         name: Generate SBOM
         if: steps.install.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 5
-        run: trivy fs --format cyclonedx --output "$RUNNER_TEMP/sbom.cdx.json" .
+        run: trivy fs --skip-dirs tools --format cyclonedx --output "$RUNNER_TEMP/sbom.cdx.json" .
       - id: upload
         if: steps.sbom.outcome == 'success'
         continue-on-error: true
@@ -300,7 +225,7 @@ jobs:
         if: steps.install.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 5
-        run: trivy fs --scanners vuln,license --format json --output "$RUNNER_TEMP/trivy.json" .
+        run: trivy fs --skip-dirs tools --scanners vuln,license --format json --output "$RUNNER_TEMP/trivy.json" .
       - name: Report
         if: always()
         env:
@@ -316,8 +241,8 @@ jobs:
           summary "## SBOM and Trivy dependency scan (report-only)" ""
 
           if [ "$INSTALL" != "success" ]; then
-            summary "**FAIL: the Trivy install did not succeed ($INSTALL), so there is no SBOM and no scan.**"
-            echo "::warning::sbom: Trivy install failed"
+            summary "**FAIL: the Trivy build did not succeed ($INSTALL), so there is no SBOM and no scan.**"
+            echo "::warning::sbom: Trivy build failed"
             exit 0
           fi
 
