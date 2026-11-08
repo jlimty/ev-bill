@@ -3,10 +3,13 @@ package web
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"html"
 	"html/template"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -353,6 +356,10 @@ const (
 // writes its quotes as &#34;, which the browser shows as plain quotes.
 var noticeHTML = template.HTMLEscapeString(`Mirrored chargers: energy and cost are estimates at rated power (DC capped at 50 kW); "occupied" includes reserved connectors.`)
 
+// listNoticeHTML is the list page's notice (VIEW-1, LIVE-4) as it appears in
+// the markup.
+var listNoticeHTML = template.HTMLEscapeString(`Real chargers: energy is estimated at rated power (DC capped at 50 kW); "occupied" includes reserved connectors.`)
+
 // charger stores a chargers row as the poller would (MIR-8).
 func (e *env) charger(id, location, operator, current string, powerW int64, held bool, observed time.Time) {
 	e.t.Helper()
@@ -404,16 +411,17 @@ func TestList_LIVE4_Content(t *testing.T) {
 	rec := e.get("/sessions")
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	wantContains(t, body, tariffText, noticeHTML, attribution,
+	wantContains(t, body, tariffText, listNoticeHTML, attribution,
 		"Test Mall", "Testco · 7.4 kW AC", "Fast Hub", "Fastco · 50 kW DC",
-		`>SG-AC-1</a> <span class="source mirror">mirror</span>`,
-		`>SG-DC-1</a> <span class="source mirror">mirror</span>`,
+		`>SG-AC-1</a> <span class="source mirror">real charger</span>`,
+		`>SG-DC-1</a> <span class="source mirror">real charger</span>`,
 		`>CP-SIM</a> <span class="source simulated">simulated</span>`,
 		"20 min ago", // SG-AC-1 started at 00:00, now is 00:20
 	)
 	// The totals are the sums of the rows' int64 values, formatted once:
 	// 18000 + 1233 + 8333 = 27566 Wh and 998 + 59 + 400 = 1457 cents.
-	wantContains(t, body, `<td class="num">`+FormatWh(27566)+`</td><td class="num">`+FormatCents(1457)+`</td>`)
+	// Two of the rows are mirror sessions, so the totals are estimates (VIEW-1).
+	wantContains(t, body, `<td class="num" data-watch>`+FormatWh(27566)+` est.</td><td class="num" data-watch>`+FormatCents(1457)+` est.</td>`)
 	if strings.Count(body, `class="source `) != 3 {
 		t.Errorf("LIVE-4: want 3 source labels, body %s", body)
 	}
@@ -580,7 +588,7 @@ func TestDetail_LIVE4_ChargerContext(t *testing.T) {
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
 	wantContains(t, body, "<dt>Location</dt><dd>Test Mall</dd>", "<dt>Operator</dt><dd>Testco</dd>",
-		"<dt>Power</dt><dd>7.4 kW AC</dd>", `<span class="source mirror">mirror</span>`, noticeHTML,
+		"<dt>Power</dt><dd>7.4 kW AC</dd>", `<span class="source mirror">real charger</span>`, noticeHTML,
 		tariffText, attribution, liveScript, `data-stream="view=session&amp;id=`+mirror+`"`)
 
 	body = e.get("/sessions/" + sim).Body.String()
@@ -768,5 +776,412 @@ func TestClock_VIEW8_YearOnlyOutsideCurrentYear(t *testing.T) {
 		if got := p.clock(c.t, true); got != c.want {
 			t.Errorf("VIEW-8: %s: clock = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// siteCharger stores one charger at a site, observed at locObserved.
+func (e *env) siteCharger(id, postal, name string) {
+	e.t.Helper()
+	e.observe([]store.ChargerRow{locCharger(id, postal, name, "Testco", datamall.Occupied)}, nil)
+}
+
+// linkWithKey returns the unescaped href of the link with this data-key, or "".
+func linkWithKey(t *testing.T, body, key string) string {
+	t.Helper()
+	m := regexp.MustCompile(`<a href="([^"]*)"[^>]*data-key="` + regexp.QuoteMeta(key) + `"`).FindStringSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	return html.UnescapeString(m[1])
+}
+
+// NAV-2: ?site= lists only mirror sessions at chargers with that postal code,
+// under a heading naming the site, with a link back to all sites. A malformed
+// postal code is a 400 that does not echo it; a well-formed one no charger has
+// is a 404 naming it; a site with no sessions says so.
+func TestList_NAV2_Site(t *testing.T) {
+	e := newEnv(t)
+	e.siteCharger("SITE-1", "038983", "MARINA SQUARE")
+	e.siteCharger("ELSE-1", "100001", "ELSEWHERE MALL")
+	// An API session reusing the ID never matches. It is stopped, since a
+	// charger has at most one active session.
+	apiID := e.start("SITE-1", sgt(23, 0, 6))
+	if _, _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, apiID, billing.Reading{At: sgt(23, 30, 6), MeterWh: 100}, fixedNow()); err != nil {
+		t.Fatalf("stop session: %v", err)
+	}
+	e.mirrorSession("SITE-1", sgt(0, 0, 7), sgt(0, 10, 7), 1233)
+	e.mirrorSession("ELSE-1", sgt(0, 5, 7), sgt(0, 15, 7), 500)
+
+	rec := e.get("/sessions?site=038983")
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	// NAV-2: the h1 names the site, followed by the link to every site.
+	wantContains(t, body, "<h1>Sessions at MARINA SQUARE</h1>\n"+`<p class="scope"><a href="/sessions">Show all sites</a></p>`,
+		"<title>Sessions at MARINA SQUARE · EV billing</title>",
+		`<caption class="vh">Sessions at MARINA SQUARE</caption>`, "1 on this page · 1 in all",
+		`<body data-stream="view=list&amp;site=038983">`)
+	if sessionRows(body) != 1 || strings.Contains(body, "ELSE-1") || strings.Contains(body, `class="source simulated"`) {
+		t.Errorf("NAV-2: site filter shows other sessions: %s", body)
+	}
+	if got := navOf(t, body); got != "Sessions" {
+		t.Errorf("NAV-1: current = %q, want Sessions", got)
+	}
+
+	rec = e.get("/sessions?site=000000")
+	wantHTML(t, rec, http.StatusNotFound)
+	wantContains(t, rec.Body.String(), "No watched site has postal code 000000.", `<a href="/sessions">Show all sessions</a>`)
+	if got := navOf(t, rec.Body.String()); got != "Sessions" {
+		t.Errorf("NAV-1: 404 current = %q, want Sessions", got)
+	}
+
+	for _, bad := range []string{"abc", "12345", "%3Cscript%3E"} {
+		rec = e.get("/sessions?site=" + bad)
+		wantHTML(t, rec, http.StatusBadRequest)
+		body = rec.Body.String()
+		wantContains(t, body, "Postal codes have 6 digits.", `<a href="/sessions">Show all sessions</a>`)
+		for _, echo := range []string{"abc", "12345", "script&gt;", "&lt;script"} {
+			if strings.Contains(body, echo) {
+				t.Errorf("NAV-2: site=%s echoes %q", bad, echo)
+			}
+		}
+		if got := navOf(t, body); got != "Sessions" {
+			t.Errorf("NAV-1: 400 current = %q, want Sessions", got)
+		}
+	}
+
+	wantContains(t, e.get("/sessions?site=038983&sort=energy&dir=asc").Body.String(),
+		`<p class="scope"><a href="/sessions?sort=energy&amp;dir=asc">Show all sites</a></p>`)
+	if body := e.get("/sessions").Body.String(); !strings.Contains(body, "<h1>Charging sessions</h1>") || strings.Contains(body, "Show all sites") {
+		t.Errorf("NAV-2: unfiltered list has the wrong h1 or a site link")
+	}
+
+	e.siteCharger("EMPTY-1", "222222", "QUIET PLACE")
+	wantContains(t, e.get("/sessions?site=222222").Body.String(), "No sessions at this site yet.")
+}
+
+// NAV-2: a failure to look up the site's name is a generic 500 page.
+func TestList_NAV2_SiteNameFailureIs500(t *testing.T) {
+	e := newEnv(t)
+	e.pool.Close()
+	wantHTML(t, e.get("/sessions?site=038983"), http.StatusInternalServerError)
+	if !strings.Contains(e.logs.String(), "site name") {
+		t.Errorf("cause not logged: %q", e.logs.String())
+	}
+}
+
+// NAV-4: 50 sessions a page with keyset links. Page 1 is live and links only
+// forward; page 2 links back, is not live, and has no stream or no-JS refresh;
+// going back to the start answers 302 to the cursorless URL.
+func TestList_NAV4_Pager(t *testing.T) {
+	e := newEnv(t)
+	for i := range 60 {
+		e.start(fmt.Sprintf("CP-%02d", i), fixedNow().Add(-time.Duration(i)*time.Minute))
+	}
+
+	first := e.get("/sessions").Body.String()
+	wantContains(t, first, "50 on this page · 60 in all", "Next →", refreshMeta, `data-stream="view=list"`,
+		`<caption class="vh">Sessions</caption>`)
+	if strings.Contains(first, "← Previous") || strings.Contains(first, "Not live") {
+		t.Errorf("NAV-4: page 1 links back or says it is not live")
+	}
+	if n := sessionRows(first); n != 50 {
+		t.Errorf("NAV-4: page 1 has %d rows, want 50", n)
+	}
+	next := linkWithKey(t, first, "pager-next")
+	if !strings.HasPrefix(next, "/sessions?cursor=") || !strings.HasSuffix(next, "&after") {
+		t.Fatalf("NAV-4: next link = %q", next)
+	}
+
+	rec := e.get(next)
+	wantHTML(t, rec, http.StatusOK)
+	second := rec.Body.String()
+	wantContains(t, second, "← Previous", "10 on this page · 60 in all", `Not live. <a href="/sessions">Back to the first page</a>`,
+		`<caption class="vh">Sessions, continued</caption>`, "CP-50", "CP-59")
+	for _, absent := range []string{"data-stream", "<noscript>", "Next →", "CP-49", liveScript} {
+		if strings.Contains(second, absent) {
+			t.Errorf("NAV-4, NAV-5: page 2 has %q", absent)
+		}
+	}
+
+	prev := linkWithKey(t, second, "pager-prev")
+	rec = e.get(prev)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/sessions" {
+		t.Errorf("NAV-4: %s = %d to %q, want 302 to /sessions", prev, rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// NAV-4: a cursor that does not decode, or a direction without a cursor, is a
+// 400 error page linking to the first page of the same filter and sort,
+// without echoing the input.
+func TestList_NAV4_BadCursorIs400(t *testing.T) {
+	e := newEnv(t)
+	for _, path := range []string{
+		"/sessions?sort=energy&cursor=evil-cursor&after",
+		"/sessions?sort=energy&after",
+		"/sessions?sort=energy&cursor=" + encodeCursor(store.SortStarted, true, store.ListCursor{ID: testCursorID}) + "&before",
+	} {
+		rec := e.get(path)
+		wantHTML(t, rec, http.StatusBadRequest)
+		body := rec.Body.String()
+		wantContains(t, body, `<a href="/sessions?sort=energy">Back to the first page</a>`)
+		if strings.Contains(body, "evil-cursor") {
+			t.Errorf("NAV-4: %s echoes the cursor", path)
+		}
+		if got := navOf(t, body); got != "Sessions" {
+			t.Errorf("NAV-1: current = %q, want Sessions", got)
+		}
+	}
+}
+
+// NAV-3: the active sort header has aria-sort and an arrow, and its link
+// reverses dir; the other sortable header links to its own default order.
+// Cost is not a link. An invalid sort or dir is a 400 linking to /sessions.
+func TestList_NAV3_SortLinks(t *testing.T) {
+	e := newEnv(t)
+	e.mockup("CP-01")
+	body := e.get("/sessions").Body.String()
+	wantContains(t, body,
+		`<th scope="col" aria-sort="descending"><a href="/sessions?dir=asc" data-key="sort-started">Started <span aria-hidden="true">↓</span></a></th>`,
+		`<th scope="col" class="num"><a href="/sessions?sort=energy" data-key="sort-energy">Energy</a></th>`,
+		`<th scope="col" class="num">Cost (62/48 tariff)</th>`)
+
+	body = e.get("/sessions?sort=energy&dir=asc").Body.String()
+	wantContains(t, body,
+		`<th scope="col"><a href="/sessions" data-key="sort-started">Started</a></th>`,
+		`<th scope="col" class="num" aria-sort="ascending"><a href="/sessions?sort=energy" data-key="sort-energy">Energy <span aria-hidden="true">↑</span></a></th>`,
+		`<body data-stream="view=list&amp;sort=energy&amp;dir=asc">`)
+	if strings.Count(body, "aria-sort=") != 1 {
+		t.Errorf("NAV-3: want exactly one aria-sort")
+	}
+
+	// Each bad value is a string the page never contains, so any echo shows.
+	for _, c := range []struct{ query, value string }{
+		{"sort=cost-by-rate", "cost-by-rate"},
+		{"dir=upwards", "upwards"},
+		{"sort=energy&dir=sideways", "sideways"},
+	} {
+		rec := e.get("/sessions?" + c.query)
+		wantHTML(t, rec, http.StatusBadRequest)
+		wantContains(t, rec.Body.String(), `<a href="/sessions">Show all sessions</a>`)
+		if strings.Contains(rec.Body.String(), c.value) {
+			t.Errorf("NAV-3: %s echoes %q", c.query, c.value)
+		}
+	}
+}
+
+// VIEW-1, VIEW-2: mirror figures carry "est." and a mirror charging session
+// reads "occupied" with the "real charger" pill; simulated ones read
+// "charging" and carry no "est.". The cost header and the totals name the
+// tariff built from its own rates.
+func TestList_VIEW1_VIEW2_Labels(t *testing.T) {
+	e := newEnv(t)
+	e.charger("SG-AC-1", "Test Mall", "Testco", "AC", 7_400, false, sgt(0, 18, 7))
+	mirrorID := e.mirrorSession("SG-AC-1", sgt(0, 0, 7), sgt(0, 10, 7), 1233) // 59 cents
+	apiID := e.start("CP-SIM", sgt(0, 15, 7))
+	e.reading(apiID, sgt(0, 18, 7), 1000) // 48 cents
+
+	body := e.get("/sessions").Body.String()
+	mirrorRow, apiRow := rowOf(t, body, mirrorID), rowOf(t, body, apiID)
+	wantContains(t, mirrorRow, `<span class="badge charging">occupied</span>`, `<span class="source mirror">real charger</span>`,
+		`<td class="num energy" data-watch>1.2 kWh est.</td>`, `<td class="num cost" data-watch>$0.59 est.</td>`)
+	wantContains(t, apiRow, badge("charging"), `<span class="source simulated">simulated</span>`,
+		`<td class="num energy" data-watch>1.0 kWh</td>`, `<td class="num cost" data-watch>$0.48</td>`)
+	if strings.Contains(apiRow, "est.") || strings.Contains(apiRow, "occupied") {
+		t.Errorf("VIEW-1/2: simulated row has est. or occupied: %s", apiRow)
+	}
+	wantContains(t, body, ">Charger</th>", ">Started <span", ">Status</th>", ">Energy</a></th>", ">Cost (62/48 tariff)</th>",
+		listNoticeHTML, `<th scope="row" colspan="3">Total, these 2 sessions</th><td class="num" data-watch>2.2 kWh est.</td><td class="num" data-watch>$1.07 est.</td>`)
+
+	// The API still reports the stored status (VIEW-2).
+	if got := statusLabel(sessions.SourceAPI, sessions.StatusCharging); got != "charging" {
+		t.Errorf("VIEW-2: api charging = %q", got)
+	}
+	for _, st := range []string{sessions.StatusStale, sessions.StatusCompleted} {
+		if got := statusLabel(sessions.SourceMirror, st); got != st {
+			t.Errorf("VIEW-2: mirror %s = %q", st, got)
+		}
+	}
+
+	// Simulated sessions only: no estimate anywhere in the figures.
+	sim := newEnv(t)
+	sim.mockup("CP-A")
+	sim.mockup("CP-B")
+	body = sim.get("/sessions").Body.String()
+	wantContains(t, body, `<th scope="row" colspan="3">Total, these 2 sessions</th><td class="num" data-watch>36.0 kWh</td><td class="num" data-watch>$19.96</td>`)
+	if strings.Contains(body, " est.") {
+		t.Errorf("VIEW-1: simulated-only page shows est.")
+	}
+	one := newEnv(t)
+	one.mockup("CP-A")
+	wantContains(t, one.get("/sessions").Body.String(), `<th scope="row" colspan="3">Total, this 1 session</th>`)
+
+	// The tariff name follows the tariff.
+	custom := billing.SingaporeTariff()
+	custom.PeakRateCentsPerKWh, custom.OffPeakRateCentsPerKWh = 55, 40
+	if got := tariffName(custom); got != "55/40" {
+		t.Errorf("VIEW-1: tariffName = %q, want 55/40", got)
+	}
+	e.p.Tariff = custom
+	wantContains(t, e.get("/sessions").Body.String(), ">Cost (55/40 tariff)</th>")
+}
+
+// sessionRows counts the list's session rows: keyed rows other than the totals.
+func sessionRows(body string) int {
+	return strings.Count(body, `<tr data-key="`) - strings.Count(body, `<tr data-key="total"`)
+}
+
+// rowOf returns the <tr> of the session with this id.
+func rowOf(t *testing.T, body, id string) string {
+	t.Helper()
+	start := strings.Index(body, `<tr data-key="`+id+`">`)
+	if start < 0 {
+		t.Fatalf("no row for %s in %s", id, body)
+	}
+	end := strings.Index(body[start:], "</tr>")
+	return body[start : start+end]
+}
+
+// VIEW-3: the table has a caption, every th has scope, every row carries its
+// session's data-key, and its status, energy and cost cells are watched
+// (VIEW-6). Each row's charger link is its only link.
+func TestList_VIEW3_TableSemantics(t *testing.T) {
+	e := newEnv(t)
+	ids := []string{e.mockup("CP-01"), e.start("CP-02", sgt(0, 15, 7))}
+	body := e.get("/sessions").Body.String()
+	wantContains(t, body, "<caption")
+	if all, scoped := len(regexp.MustCompile(`<th[ >]`).FindAllString(body, -1)), strings.Count(body, `<th scope="`); all != scoped || all == 0 {
+		t.Errorf("VIEW-3: %d th, %d with scope", all, scoped)
+	}
+	if n := sessionRows(body); n != len(ids) {
+		t.Errorf("VIEW-3: %d keyed rows, want %d", n, len(ids))
+	}
+	for _, id := range ids {
+		row := rowOf(t, body, id)
+		if n := strings.Count(row, "data-watch"); n != 3 {
+			t.Errorf("VIEW-6: row %s has %d watched cells, want 3", id, n)
+		}
+		wantContains(t, row, `<td class="status" data-watch>`, `<td class="num energy" data-watch>`, `<td class="num cost" data-watch>`)
+		if n := strings.Count(row, "<a "); n != 1 {
+			t.Errorf("VIEW-3: row %s has %d links, want 1", id, n)
+		}
+	}
+}
+
+// NAV-4: a cursor past the end of the order (its rows were deleted, or it was
+// built by hand) shows an empty page whose Previous link starts again at the
+// first page, since there is no row to page back from.
+func TestList_NAV4_PastTheEnd(t *testing.T) {
+	e := newEnv(t)
+	e.mockup("CP-01")
+	cursor := encodeCursor(store.SortStarted, true, store.ListCursor{StartedAt: sgt(0, 0, 1), ID: testCursorID})
+	rec := e.get("/sessions?cursor=" + cursor + "&after")
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	wantContains(t, body, "0 on this page · 1 in all", "No sessions on this page.")
+	if got := linkWithKey(t, body, "pager-prev"); got != "/sessions" {
+		t.Errorf("NAV-4: previous link = %q, want /sessions", got)
+	}
+	if strings.Contains(body, "pager-next") || strings.Contains(body, "<tfoot>") {
+		t.Errorf("NAV-4: empty page has a next link or totals")
+	}
+}
+
+// rowIDs returns the session IDs of the list's rows, in order.
+func rowIDs(body string) []string {
+	var ids []string
+	for _, m := range regexp.MustCompile(`<tr data-key="([0-9a-f-]{36})">`).FindAllStringSubmatch(body, -1) {
+		ids = append(ids, m[1])
+	}
+	return ids
+}
+
+// cursorOf decodes the cursor in a pager link for the query's sort and dir.
+func cursorOf(t *testing.T, link string, sort store.SessionSort, desc bool) (store.ListCursor, bool) {
+	t.Helper()
+	u, err := url.Parse(link)
+	if err != nil {
+		t.Fatalf("parse %q: %v", link, err)
+	}
+	c, err := decodeCursor(u.Query().Get("cursor"), sort, desc)
+	if err != nil {
+		t.Fatalf("NAV-4: link %q has a bad cursor: %v", link, err)
+	}
+	return c, u.Query().Has("before")
+}
+
+// NAV-4: a Before page that does not reach the start is served, not
+// redirected. Going back from page 3 gives page 2 again, and its Previous and
+// Next cursors are built from its own first and last rows.
+func TestList_NAV4_BeforePageCursors(t *testing.T) {
+	e := newEnv(t)
+	for i := range 120 {
+		e.start(fmt.Sprintf("CP-%03d", i), fixedNow().Add(-time.Duration(i)*time.Minute))
+	}
+	page1 := e.get("/sessions").Body.String()
+	page2 := e.get(linkWithKey(t, page1, "pager-next")).Body.String()
+	page3 := e.get(linkWithKey(t, page2, "pager-next")).Body.String()
+	wantContains(t, page3, "20 on this page · 120 in all")
+
+	rec := e.get(linkWithKey(t, page3, "pager-prev"))
+	wantHTML(t, rec, http.StatusOK)
+	back := rec.Body.String()
+	ids := rowIDs(back)
+	if want := rowIDs(page2); strings.Join(ids, ",") != strings.Join(want, ",") || len(ids) != 50 {
+		t.Fatalf("NAV-4: back from page 3 gave %d rows, not page 2's %d", len(ids), len(want))
+	}
+	wantContains(t, back, "← Previous", "Next →", "Not live")
+
+	prev, before := cursorOf(t, linkWithKey(t, back, "pager-prev"), store.SortStarted, true)
+	if !before || prev.ID != ids[0] || !prev.StartedAt.Equal(fixedNow().Add(-50*time.Minute)) {
+		t.Errorf("NAV-4: previous cursor = %+v (before %v), want the first row %s at -50 min", prev, before, ids[0])
+	}
+	next, before := cursorOf(t, linkWithKey(t, back, "pager-next"), store.SortStarted, true)
+	if before || next.ID != ids[len(ids)-1] || !next.StartedAt.Equal(fixedNow().Add(-99*time.Minute)) {
+		t.Errorf("NAV-4: next cursor = %+v (before %v), want the last row %s at -99 min", next, before, ids[len(ids)-1])
+	}
+}
+
+// NAV-3, NAV-4: under the energy sort the cursor carries the billed energy, so
+// following Next and then Previous returns the same rows. Several sessions
+// share each energy value, so the id tie-break is crossed at the page edge.
+func TestList_NAV4_EnergyPagingRoundTrip(t *testing.T) {
+	e := newEnv(t)
+	for i := range 60 {
+		id := e.start(fmt.Sprintf("CP-%02d", i), sgt(0, 0, 7).Add(time.Duration(i)*time.Second))
+		e.reading(id, sgt(0, 10, 7), int64(1000*(i%7))) // 0..6 kWh, about 9 sessions each
+	}
+	page1 := e.get("/sessions?sort=energy&dir=asc").Body.String()
+	first := rowIDs(page1)
+	wantContains(t, page1, "50 on this page · 60 in all")
+
+	nextLink := linkWithKey(t, page1, "pager-next")
+	c, _ := cursorOf(t, nextLink, store.SortEnergy, false)
+	if c.ID != first[len(first)-1] {
+		t.Errorf("NAV-4: next cursor id %s, want the last row %s", c.ID, first[len(first)-1])
+	}
+	page2 := e.get(nextLink).Body.String()
+	second := rowIDs(page2)
+	if len(second) != 10 {
+		t.Fatalf("NAV-4: energy page 2 has %d rows, want 10", len(second))
+	}
+	seen := map[string]bool{}
+	for _, id := range append(append([]string{}, first...), second...) {
+		if seen[id] {
+			t.Errorf("NAV-4: %s appears on both pages", id)
+		}
+		seen[id] = true
+	}
+	// Previous from page 2 reaches the start, so it redirects to the first
+	// page, which has the same rows as before.
+	rec := e.get(linkWithKey(t, page2, "pager-prev"))
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/sessions?sort=energy&dir=asc" {
+		t.Fatalf("NAV-4: previous = %d to %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if again := rowIDs(e.get(rec.Header().Get("Location")).Body.String()); strings.Join(again, ",") != strings.Join(first, ",") {
+		t.Errorf("NAV-4: first page changed after Next then Previous")
+	}
+	// Rows come in energy order: the 6 kWh sessions are all on page 2.
+	if !strings.Contains(page2, "6.0 kWh") || strings.Contains(page1, "<td class=\"num energy\" data-watch>6.0 kWh</td>") {
+		t.Errorf("NAV-3: energy order wrong across pages")
 	}
 }

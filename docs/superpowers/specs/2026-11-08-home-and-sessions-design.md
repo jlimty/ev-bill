@@ -276,16 +276,18 @@ Each test names its rule.
 | Where | Copy |
 |---|---|
 | Home, empty states | Live mirror off · no location data yet. See sessions → |
-| Malformed site | Postal codes have 6 digits. Show all sessions |
-| Unknown site | No watched site has postal code {postal}. Show all sessions |
-| Site heading | Sessions at {site name} · Show all sites |
+| Malformed site | Heading "Not a postal code". Postal codes have 6 digits. Show all sessions |
+| Unknown site | Heading "Site not found". No watched site has postal code {postal}. Show all sessions |
+| Bad sort or dir | Heading "Sort not available". Sessions sort by start time or by energy. Show all sessions |
+| Bad cursor or direction | Heading "Page link not valid". This page link is malformed or out of date. Back to the first page (the same filter and sort, without the cursor) |
+| Site heading | The h1 reads "Sessions at {site name}", followed by the link "Show all sites" (keeps sort and dir). Without a filter the h1 is "Charging sessions". |
 | Card link | All sessions at this site → |
 | Empty site | No sessions at this site yet. |
-| Count line | {n} on this page · {total} in all |
+| Count line | {n} on this page · {total} in all. Hidden when nothing matches the filter (the empty-state copy says so). |
 | Pager | ← Previous · Next → |
-| Cursor page | Not live. Back to the first page |
+| Cursor page | Not live. Back to the first page (shown in place of the feed line) |
 | List headers | Charger · Started · Status · Energy · Cost (62/48 tariff) |
-| List total | Total, these {n} sessions |
+| List total | Total, these {n} sessions / Total, this 1 session |
 | Locations facts | … · est. value at today's posted price (operator's price, not the 62/48 billing tariff) |
 | Card percentage | {N}% · {H} h avg · observed |
 | Card count | Now: {b} busy · {f} free · {o} out |

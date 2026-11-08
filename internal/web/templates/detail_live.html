@@ -1,6 +1,6 @@
 {{define "detail_live"}}<div class="card">
 <dl>
-<dt>Charger</dt><dd>{{.Charger}} <span class="source {{.Source}}">{{.Source}}</span></dd>
+<dt>Charger</dt><dd>{{.Charger}} <span class="source {{.SourceClass}}">{{.SourceLabel}}</span></dd>
 {{with .Location}}<dt>Location</dt><dd>{{.}}</dd>
 {{end}}{{with .Operator}}<dt>Operator</dt><dd>{{.}}</dd>
 {{end}}{{with .Power}}<dt>Power</dt><dd>{{.}}</dd>

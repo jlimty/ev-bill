@@ -24,9 +24,10 @@ type fragment struct {
 type fragmentFunc func(context.Context) (fragment, error)
 
 // renderCache shares renders between the streams on one view (LIVE-1,
-// LIVE-2). A view is a key: "list", "locations", or "session:<id>". Every stream on a view
-// that asks for the same hub generation gets the bytes of one render, so the
-// cost of a hub signal grows with the number of views, not of viewers.
+// LIVE-2). A view is a key: "list|<site>|<sort>|<dir>" (NAV-5), "locations",
+// or "session:<id>". Every stream on a view that asks for the same hub
+// generation gets the bytes of one render, so the cost of a hub signal grows
+// with the number of views, not of viewers.
 //
 // It keeps one render per view, the latest, and forgets a view when its last
 // stream ends, so it never holds more entries than there are open streams.

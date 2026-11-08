@@ -595,6 +595,8 @@ func TestEvents_LIVE1_RenderEndLogLevels(t *testing.T) {
 	}{
 		{"client gone", fmt.Errorf("list sessions: %w", context.Canceled), "level=INFO"},
 		{"session deleted", fmt.Errorf("get session: %w", sessions.ErrNotFound), "level=INFO"},
+		// NAV-5: a site whose chargers rows are gone ends its stream normally.
+		{"site gone", errUnknownSite, "level=INFO"},
 		{"other failure", boom, "level=ERROR"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -807,4 +809,78 @@ func TestEvents_LOC7_LocationsStoreFailureIs500(t *testing.T) {
 	if !strings.Contains(e.logs.String(), "location scope") {
 		t.Errorf("cause not logged: %q", e.logs.String())
 	}
+}
+
+// NAV-5: the list view takes the page's site, sort and dir, validated like the
+// page: an invalid value, a well-formed site no charger has, or a cursor (only
+// first pages are live) is a plain 400. Equivalent queries share one render.
+func TestEvents_NAV5_ListParams(t *testing.T) {
+	e := newStreamEnv(t, 100, nil)
+	e.siteCharger("SITE-1", "038983", "MARINA SQUARE")
+	e.mirrorSession("SITE-1", sgt(0, 0, 7), sgt(0, 10, 7), 1233)
+	e.mockup("CP-SIM")
+
+	path := "/events?view=list&site=038983&sort=energy"
+	first := openStream(t, e.srv, path).mustNext("list")
+	wantContains(t, first, "Sessions at MARINA SQUARE", "SITE-1", `aria-sort="descending"`)
+	if strings.Contains(first, "CP-SIM") {
+		t.Errorf("NAV-5: site stream lists other sessions: %s", first)
+	}
+	if page := e.get("/sessions?site=038983&sort=energy").Body.String(); !strings.Contains(page, `<div class="card" data-live="list">`+first) {
+		t.Errorf("NAV-5: site stream is not the page's fragment:\nevent: %s\npage: %s", first, page)
+	}
+
+	cursor := encodeCursor(store.SortStarted, true, store.ListCursor{StartedAt: sgt(0, 0, 7), ID: testCursorID})
+	for _, bad := range []string{
+		"sort=cost", "dir=up", "site=abc", "site=000000",
+		"cursor=" + cursor + "&after", "cursor=" + cursor + "&before", "after", "cursor=junk&after",
+	} {
+		rec := e.get("/events?view=list&" + bad)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("NAV-5: /events?view=list&%s = %d, want 400", bad, rec.Code)
+		}
+		for _, echo := range []string{"cost", "abc", "000000", "junk"} {
+			if strings.Contains(rec.Body.String(), echo) {
+				t.Errorf("NAV-5: /events?view=list&%s echoes %q", bad, echo)
+			}
+		}
+	}
+
+	// A fresh server, so no other stream renders on the Publish below.
+	shared := newStreamEnv(t, 100, nil)
+	a := openStream(t, shared.srv, "/events?view=list")
+	a.mustNext("list")
+	b := openStream(t, shared.srv, "/events?view=list&sort=started&dir=desc&site=")
+	b.mustNext("list")
+	before := shared.p.renders.renders.Load()
+	shared.start("CP-NEW", sgt(0, 15, 7))
+	shared.hub.Publish()
+	for _, c := range []*sseClient{a, b} {
+		wantContains(t, c.mustNext("list"), "CP-NEW")
+	}
+	if n := shared.p.renders.renders.Load() - before; n != 1 {
+		t.Errorf("NAV-5: one Publish to two equivalent list streams made %d renders, want 1", n)
+	}
+}
+
+// NAV-5: a failure to look up the stream's site is a 500 with the cause only
+// in the log.
+func TestEvents_NAV5_SiteNameFailureIs500(t *testing.T) {
+	e := newStreamEnv(t, 1, nil)
+	e.pool.Close()
+	rec := e.get("/events?view=list&site=038983")
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "closed") {
+		t.Fatalf("GET /events?view=list&site=038983 = %d %q, want a generic 500", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(e.logs.String(), "site name") {
+		t.Errorf("cause not logged: %q", e.logs.String())
+	}
+}
+
+// NAV-5, LIVE-1, LOC-7: streams opened by pages from before the list took
+// parameters still work.
+func TestEvents_NAV5_OldQueriesStillWork(t *testing.T) {
+	e := newStreamEnv(t, 100, nil)
+	openStream(t, e.srv, "/events?view=list").mustNext("list")
+	openStream(t, e.srv, "/events?view=locations").mustNext("locations")
 }
