@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,7 +40,7 @@ type MirrorStore interface {
 	CreateSession(ctx context.Context, as sessions.Source, chargerID string, startedAt time.Time, meterStartWh int64, now time.Time) (sessions.Session, error)
 	AddReading(ctx context.Context, as sessions.Source, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error)
 	StopSession(ctx context.Context, as sessions.Source, id string, stop billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error)
-	UpsertChargers(ctx context.Context, rows []store.ChargerRow) error
+	ApplyObservation(ctx context.Context, rows []store.ChargerRow, samples []store.OccupancySample) error
 }
 
 // Reconciler applies one snapshot at a time to the database (MIR-3..8). It
@@ -93,7 +95,9 @@ func (r *Reconciler) Apply(ctx context.Context, snap datamall.Snapshot) (changed
 		}
 	}
 
-	// Written last: a cycle cut off above leaves observed_at where it was.
+	// Written last, in one transaction with this snapshot's occupancy samples
+	// (LOC-1): a cycle cut off above leaves observed_at where it was and writes
+	// no sample, so the retry samples the file once.
 	rows := make([]store.ChargerRow, 0, len(conns))
 	detailsChanged := false
 	for _, c := range conns {
@@ -103,10 +107,39 @@ func (r *Reconciler) Apply(ctx context.Context, snap datamall.Snapshot) (changed
 		}
 		rows = append(rows, row)
 	}
-	if err := r.Store.UpsertChargers(ctx, rows); err != nil {
+	if err := r.Store.ApplyObservation(ctx, rows, Samples(conns, observed)); err != nil {
 		return false, fmt.Errorf("reconcile: %w", err)
 	}
 	return applied > 0 || detailsChanged, nil
+}
+
+// Samples counts conns by postal code and status, one sample per postal code
+// present, sorted by postal code (LOC-1). conns is the snapshot's watched
+// connectors after MIR-2's cap, so a location with no connectors gets no
+// sample. Unavailable covers every status the feed parser does not know.
+func Samples(conns []datamall.Connector, observed time.Time) []store.OccupancySample {
+	byPostal := map[string]*store.OccupancySample{}
+	for _, c := range conns {
+		smp, ok := byPostal[c.PostalCode]
+		if !ok {
+			smp = &store.OccupancySample{PostalCode: c.PostalCode, ObservedAt: observed}
+			byPostal[c.PostalCode] = smp
+		}
+		switch c.Status {
+		case datamall.Occupied:
+			smp.Occupied++
+		case datamall.Available:
+			smp.Available++
+		default:
+			smp.Unavailable++
+		}
+	}
+	out := make([]store.OccupancySample, 0, len(byPostal))
+	for _, smp := range byPostal {
+		out = append(out, *smp)
+	}
+	slices.SortFunc(out, func(a, b store.OccupancySample) int { return strings.Compare(a.PostalCode, b.PostalCode) })
+	return out
 }
 
 // scope returns the connectors to mirror: those with a charger ID that SES-1

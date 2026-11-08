@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/jlimty/ev-bill/internal/billing"
 	"github.com/jlimty/ev-bill/internal/datamall"
 	"github.com/jlimty/ev-bill/internal/sessions"
@@ -303,6 +306,13 @@ func TestStore_MIR_FailuresArePlainErrors(t *testing.T) {
 			_, err := s.DeleteCompletedMirrorBefore(cctx, now)
 			return err
 		},
+		"ApplyObservation": func() error {
+			return s.ApplyObservation(cctx, nil, []store.OccupancySample{sample("100001", now, 1, 0, 0)})
+		},
+		"DeleteSamplesBefore": func() error {
+			_, err := s.DeleteSamplesBefore(cctx, now)
+			return err
+		},
 		"Charger":   func() error { _, _, err := s.Charger(cctx, "SG-1"); return err },
 		"HeldCount": func() error { _, err := s.HeldCount(cctx); return err },
 	}
@@ -385,4 +395,155 @@ func TestStore_LIVE4_ListRecentChargersFailure(t *testing.T) {
 	}
 	_, err := s.ListRecent(ctx(), 5)
 	requirePlainError(t, "ListRecent", err)
+}
+
+// storedSamples returns every occupancy sample, by postal code then time.
+func storedSamples(t *testing.T, pool *pgxpool.Pool) []store.OccupancySample {
+	t.Helper()
+	rows, err := pool.Query(ctx(), `SELECT postal_code, observed_at, occupied, available, unavailable
+		FROM occupancy_samples ORDER BY postal_code, observed_at`)
+	if err != nil {
+		t.Fatalf("query samples: %v", err)
+	}
+	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.OccupancySample, error) {
+		var s store.OccupancySample
+		err := row.Scan(&s.PostalCode, &s.ObservedAt, &s.Occupied, &s.Available, &s.Unavailable)
+		s.ObservedAt = s.ObservedAt.UTC()
+		return s, err
+	})
+	if err != nil {
+		t.Fatalf("scan samples: %v", err)
+	}
+	return list
+}
+
+func sample(postal string, observed time.Time, occupied, available, unavailable int) store.OccupancySample {
+	return store.OccupancySample{PostalCode: postal, ObservedAt: observed, Occupied: occupied, Available: available, Unavailable: unavailable}
+}
+
+// LOC-1: the charger rows and the occupancy samples of one observation are
+// both stored. A sample whose (postal_code, observed_at) is already stored is
+// left as it is, without an error (ON CONFLICT DO NOTHING, for two instances
+// writing at once during a deploy overlap).
+func TestStore_LOC1_ApplyObservationWritesBoth(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	s := store.New(pool)
+	t0 := at(10, 0, 0, 0)
+
+	rows := []store.ChargerRow{
+		chargerRow("SG-1", datamall.Occupied, false, t0),
+		chargerRow("SG-2", datamall.Available, false, t0),
+	}
+	samples := []store.OccupancySample{sample("100001", t0, 1, 1, 0), sample("100002", t0, 0, 0, 2)}
+	if err := s.ApplyObservation(ctx(), rows, samples); err != nil {
+		t.Fatalf("ApplyObservation: %v", err)
+	}
+	states, err := s.ChargerStates(ctx())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 2 || states["SG-1"].Status != datamall.Occupied || !states["SG-2"].ObservedAt.Equal(t0) {
+		t.Fatalf("ChargerStates = %+v, want SG-1 and SG-2 observed at t0", states)
+	}
+	want := []store.OccupancySample{sample("100001", t0.UTC(), 1, 1, 0), sample("100002", t0.UTC(), 0, 0, 2)}
+	got := storedSamples(t, pool)
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("samples = %+v, want %+v", got, want)
+	}
+
+	// The same key again, even with different counts, is a no-op.
+	again := []store.OccupancySample{sample("100001", t0, 2, 0, 0)}
+	if err := s.ApplyObservation(ctx(), nil, again); err != nil {
+		t.Fatalf("repeated sample: %v, want nil (ON CONFLICT DO NOTHING)", err)
+	}
+	got = storedSamples(t, pool)
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("after a repeated sample: %+v, want %+v unchanged", got, want)
+	}
+}
+
+// LOC-1: the rows and the samples are one transaction. A bad charger row or a
+// bad sample leaves neither the rows nor the samples behind.
+func TestStore_LOC1_ApplyObservationIsAtomic(t *testing.T) {
+	t.Parallel()
+	t0 := at(10, 0, 0, 0)
+	badRow := chargerRow("SG-2", datamall.Available, false, t0)
+	badRow.PowerW = 0 // violates CHECK (power_w > 0)
+	goodRows := []store.ChargerRow{chargerRow("SG-1", datamall.Available, false, t0)}
+	goodSamples := []store.OccupancySample{sample("100001", t0, 0, 1, 0)}
+
+	for _, tc := range []struct {
+		name    string
+		rows    []store.ChargerRow
+		samples []store.OccupancySample
+	}{
+		{"bad charger row", append(goodRows, badRow), goodSamples},
+		{"bad sample", goodRows, append(goodSamples, sample("100002", t0, -1, 0, 0))}, // CHECK (occupied >= 0)
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pool := testdb.New(t)
+			s := store.New(pool)
+			err := s.ApplyObservation(ctx(), tc.rows, tc.samples)
+			requirePlainError(t, "ApplyObservation", err)
+			if _, ok, err := s.LatestObservation(ctx()); err != nil || ok {
+				t.Fatalf("charger rows stored after a failed observation (ok = %v, err = %v)", ok, err)
+			}
+			if got := storedSamples(t, pool); len(got) != 0 {
+				t.Fatalf("samples stored after a failed observation: %+v", got)
+			}
+		})
+	}
+}
+
+// LOC-1: an observation with no rows and no samples writes nothing and needs
+// no transaction, so even a cancelled context succeeds. Samples without rows
+// are still written.
+func TestStore_LOC1_ApplyObservationEmptyAndSamplesOnly(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	s := store.New(pool)
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.ApplyObservation(cctx, nil, nil); err != nil {
+		t.Fatalf("ApplyObservation(nil, nil) = %v, want nil without touching the database", err)
+	}
+	t0 := at(10, 0, 0, 0)
+	if err := s.ApplyObservation(ctx(), nil, []store.OccupancySample{sample("100001", t0, 3, 0, 1)}); err != nil {
+		t.Fatalf("samples only: %v", err)
+	}
+	if got := storedSamples(t, pool); len(got) != 1 || got[0] != sample("100001", t0.UTC(), 3, 0, 1) {
+		t.Fatalf("samples = %+v, want the one sample", got)
+	}
+}
+
+// LOC-1, MIR-9: retention deletes samples observed before the cutoff and
+// keeps the rest, including one exactly at the cutoff.
+func TestStore_LOC1_DeleteSamplesBefore(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	s := store.New(pool)
+	cutoff := at(8, 0, 0, 0)
+	samples := []store.OccupancySample{
+		sample("100001", at(1, 0, 0, 0), 1, 0, 0),
+		sample("100002", at(7, 59, 59, 0), 1, 0, 0),
+		sample("100001", cutoff, 0, 1, 0),
+		sample("100002", at(9, 0, 0, 0), 0, 0, 1),
+	}
+	if err := s.ApplyObservation(ctx(), nil, samples); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.DeleteSamplesBefore(ctx(), cutoff)
+	if err != nil || n != 2 {
+		t.Fatalf("DeleteSamplesBefore = %d, %v; want 2, nil", n, err)
+	}
+	got := storedSamples(t, pool)
+	want := []store.OccupancySample{sample("100001", cutoff.UTC(), 0, 1, 0), sample("100002", at(9, 0, 0, 0).UTC(), 0, 0, 1)}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("samples kept = %+v, want %+v", got, want)
+	}
+	if n, err := s.DeleteSamplesBefore(ctx(), cutoff); err != nil || n != 0 {
+		t.Errorf("second delete = %d, %v; want 0, nil", n, err)
+	}
 }

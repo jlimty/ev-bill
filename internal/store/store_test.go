@@ -459,7 +459,7 @@ func TestMigrate_DownThenUp_OPS4(t *testing.T) {
 		t.Fatalf("down: %v", err)
 	}
 	var n int
-	if err := pool.QueryRow(ctx(), `SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('sessions','meter_readings')`).Scan(&n); err != nil || n != 0 {
+	if err := pool.QueryRow(ctx(), `SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('sessions','meter_readings','chargers','occupancy_samples')`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("tables after down = %d, %v; want 0", n, err)
 	}
 	if err := store.Migrate(ctx(), pool); err != nil {
