@@ -21,6 +21,7 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 15 | 2026-11-08 | Task 8 / API-1 | `RequireAPIKey` compared hashes of the configured key and the header, so an empty configured key matched a request with no header and turned authentication off | review | An empty configured key rejects every request | Test; `config.Load` also refuses a missing `API_KEY` |
 | 16 | 2026-11-08 | Task 8 / Review Focus 4 | The "body over 1 MiB" test sent a body that was also missing fields, so it passed with the size limit removed | review (manual mutation) | The oversized body is otherwise valid and would get 201 without the limit | Test, shown failing with the limit removed |
 | 17 | 2026-11-08 | Task 8 / API-3 | Known limitation, not a fix: `encoding/json` matches keys case-insensitively and keeps the last of duplicate keys, so a body such as `{"TIMESTAMP": …}` is accepted although the contract is strict | review | Documented in `decode.go` | None: no 500 or security impact |
+| 18 | 2026-11-08 | Task 10 / OPS-3 | When graceful shutdown timed out, `Serve` returned without force-closing the server, so a stuck request could keep its database connection and hold the process past the 10 s limit | review | `srv.Close()` after a failed `Shutdown`, its error logged | Test: a stuck handler's request context is cancelled once `Serve` returns |
 
 ## Mutation baseline
 
