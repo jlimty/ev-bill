@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 )
@@ -380,4 +381,30 @@ func FuzzSplit(f *testing.F) {
 			t.Errorf("last segment ends %v, want %v", last.End, readings[len(readings)-1].At)
 		}
 	})
+}
+
+// BIL-6 (Split validation): when several faults exist, the first faulty
+// reading decides the error, and within one reading the order is negative,
+// then time, then energy.
+func TestSplit_BIL6_FirstFaultWins(t *testing.T) {
+	t0 := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		readings []Reading
+		want     error
+		wantMsg  string
+	}{
+		{"time fault at 1 beats negative at 2",
+			[]Reading{{t0, 0}, {t0, 5}, {t0.Add(time.Hour), -1}}, ErrReadingsNotIncreasing, "reading 1:"},
+		{"energy fault at 1 beats negative at 2",
+			[]Reading{{t0, 10}, {t0.Add(time.Hour), 5}, {t0.Add(2 * time.Hour), -1}}, ErrEnergyDecreased, "reading 1:"},
+		{"negative first reading",
+			[]Reading{{t0, -1}, {t0, 5}}, ErrNegativeMeter, "reading 0:"},
+	}
+	for _, c := range cases {
+		_, err := Split(SingaporeTariff(), c.readings)
+		if !errors.Is(err, c.want) || !strings.HasPrefix(err.Error(), c.wantMsg) {
+			t.Errorf("%s: err = %v, want %v with prefix %q", c.name, err, c.want, c.wantMsg)
+		}
+	}
 }

@@ -43,13 +43,15 @@ func Split(t Tariff, readings []Reading) ([]Segment, error) {
 		if r.MeterWh < 0 {
 			return nil, fmt.Errorf("reading %d: %w", i, ErrNegativeMeter)
 		}
-		if i > 0 {
-			if !r.At.After(prev.At) {
-				return nil, fmt.Errorf("reading %d: %w", i, ErrReadingsNotIncreasing)
-			}
-			if r.MeterWh < prev.MeterWh {
-				return nil, fmt.Errorf("reading %d: %w", i, ErrEnergyDecreased)
-			}
+		if i == 0 {
+			prev = r
+			continue
+		}
+		if !r.At.After(prev.At) {
+			return nil, fmt.Errorf("reading %d: %w", i, ErrReadingsNotIncreasing)
+		}
+		if r.MeterWh < prev.MeterWh {
+			return nil, fmt.Errorf("reading %d: %w", i, ErrEnergyDecreased)
 		}
 		prev = r
 	}
@@ -75,7 +77,7 @@ func splitInterval(t Tariff, a, b Reading) []Segment {
 	// monotonic clock reading, so mixing in b.At.Sub(a.At) could make a part
 	// larger than the whole. Here part < whole holds by construction.
 	intervalNs := bounds[len(bounds)-1].Sub(bounds[0])
-	pieces := make([]Segment, 0, len(bounds)-1)
+	var pieces []Segment
 	var assigned int64
 	for i := 0; i+1 < len(bounds); i++ {
 		var wh int64
