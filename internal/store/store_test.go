@@ -165,7 +165,7 @@ func TestAddReading_StoresAndReturnsSorted(t *testing.T) {
 	s := newStore(t)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
 	for _, r := range []billing.Reading{{At: at(10, 10, 0, 0), MeterWh: 2000}, {At: at(10, 5, 0, 0), MeterWh: 1000}} {
-		dup, err := s.AddReading(ctx(), sess.ID, r, now)
+		_, _, dup, err := s.AddReading(ctx(), sess.ID, r, now)
 		if err != nil || dup {
 			t.Fatalf("AddReading(%v) = %v, %v", r, dup, err)
 		}
@@ -196,7 +196,7 @@ func TestGetSession_ReturnsUTC(t *testing.T) {
 	if sess.StartedAt.Location() != time.UTC {
 		t.Fatalf("created StartedAt zone = %v, want UTC", sess.StartedAt.Location())
 	}
-	if _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 10}, now); err != nil {
+	if _, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 10}, now); err != nil {
 		t.Fatal(err)
 	}
 	stopAt := at(10, 20, 0, 0)
@@ -225,10 +225,10 @@ func TestAddReading_DuplicateIsNoop(t *testing.T) {
 	s := store.New(pool)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
 	r := billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}
-	if dup, err := s.AddReading(ctx(), sess.ID, r, now); err != nil || dup {
+	if _, _, dup, err := s.AddReading(ctx(), sess.ID, r, now); err != nil || dup {
 		t.Fatalf("first = %v, %v", dup, err)
 	}
-	if dup, err := s.AddReading(ctx(), sess.ID, r, now); err != nil || !dup {
+	if _, _, dup, err := s.AddReading(ctx(), sess.ID, r, now); err != nil || !dup {
 		t.Fatalf("second = %v, %v; want duplicate", dup, err)
 	}
 	if n := countReadings(t, pool, sess.ID); n != 1 {
@@ -244,10 +244,10 @@ func TestAddReading_SubMicrosecondReplayIsDuplicate(t *testing.T) {
 	pool := testdb.New(t)
 	s := store.New(pool)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
-	if dup, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 10, 0, 123), MeterWh: 700}, now); err != nil || dup {
+	if _, _, dup, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 10, 0, 123), MeterWh: 700}, now); err != nil || dup {
 		t.Fatalf("first = %v, %v", dup, err)
 	}
-	if dup, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 10, 0, 456), MeterWh: 700}, now); err != nil || !dup {
+	if _, _, dup, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 10, 0, 456), MeterWh: 700}, now); err != nil || !dup {
 		t.Fatalf("second = %v, %v; want duplicate", dup, err)
 	}
 	if n := countReadings(t, pool, sess.ID); n != 1 {
@@ -259,10 +259,10 @@ func TestAddReading_SES2_ConflictingValueAtSameTimestamp(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
-	if _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}, now); err != nil {
+	if _, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}, now); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 600}, now)
+	_, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 600}, now)
 	requireRule(t, err, sessions.KindConflict, "conflicting_reading")
 }
 
@@ -272,7 +272,7 @@ func TestAddReading_UnknownOrMalformedID(t *testing.T) {
 	s := newStore(t)
 	r := billing.Reading{At: at(10, 5, 0, 0), MeterWh: 1}
 	for _, id := range []string{"00000000-0000-4000-8000-000000000000", "nope", ""} {
-		if _, err := s.AddReading(ctx(), id, r, now); !errors.Is(err, sessions.ErrNotFound) {
+		if _, _, _, err := s.AddReading(ctx(), id, r, now); !errors.Is(err, sessions.ErrNotFound) {
 			t.Errorf("AddReading(%q) err = %v, want ErrNotFound", id, err)
 		}
 		if _, _, err := s.StopSession(ctx(), id, r, now); !errors.Is(err, sessions.ErrNotFound) {
@@ -288,7 +288,7 @@ func TestStopSession_SES3(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
-	if _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}, now); err != nil {
+	if _, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}, now); err != nil {
 		t.Fatal(err)
 	}
 	stop := billing.Reading{At: at(10, 30, 0, 0), MeterWh: 3000}
@@ -306,7 +306,7 @@ func TestStopSession_SES3(t *testing.T) {
 		t.Fatalf("readings = %v", readings)
 	}
 
-	_, err = s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 40, 0, 0), MeterWh: 4000}, now)
+	_, _, _, err = s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 40, 0, 0), MeterWh: 4000}, now)
 	requireRule(t, err, sessions.KindConflict, "session_stopped")
 
 	replay, rReadings, err := s.StopSession(ctx(), sess.ID, stop, now)
@@ -333,7 +333,7 @@ func TestListRecent_NewestFirstWithLimit(t *testing.T) {
 	c := mustCreate(t, s, "CH-C", at(10, 0, 0, 0), 0)
 	for _, sess := range []sessions.Session{a, b, c} {
 		for _, m := range []int{5, 1} { // inserted out of order on purpose
-			if _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: sess.StartedAt.Add(time.Duration(m) * time.Minute), MeterWh: int64(m)}, now); err != nil {
+			if _, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: sess.StartedAt.Add(time.Duration(m) * time.Minute), MeterWh: int64(m)}, now); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -369,7 +369,7 @@ func TestAddReading_SES6_ConcurrentDuplicates(t *testing.T) {
 	dups := make([]bool, n)
 	errs := make([]error, n)
 	race(t, pool, n, func(i int) {
-		dups[i], errs[i] = s.AddReading(ctx(), sess.ID, r, now)
+		_, _, dups[i], errs[i] = s.AddReading(ctx(), sess.ID, r, now)
 	})
 
 	fresh := 0
@@ -404,7 +404,7 @@ func TestAddReadingVsStop_SES6_Consistent(t *testing.T) {
 	var addErr, stopErr error
 	race(t, pool, 2, func(i int) {
 		if i == 0 {
-			_, addErr = s.AddReading(ctx(), sess.ID, reading, now)
+			_, _, _, addErr = s.AddReading(ctx(), sess.ID, reading, now)
 		} else {
 			_, _, stopErr = s.StopSession(ctx(), sess.ID, stop, now)
 		}
@@ -458,5 +458,28 @@ func TestMigrate_DownThenUp_OPS4(t *testing.T) {
 	}
 	if err := store.Migrate(ctx(), pool); err != nil {
 		t.Fatalf("up again: %v", err)
+	}
+}
+
+// SES-2: AddReading returns the session and all readings, sorted, from its own
+// transaction, for both a new reading and a duplicate.
+func TestAddReading_ReturnsSessionAndReadings(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
+	r1 := billing.Reading{At: at(10, 10, 0, 0), MeterWh: 2000}
+	r2 := billing.Reading{At: at(10, 5, 0, 0), MeterWh: 1000}
+	for i, r := range []billing.Reading{r1, r2, r2} {
+		got, readings, dup, err := s.AddReading(ctx(), sess.ID, r, now)
+		if err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		if got.ID != sess.ID || dup != (i == 2) {
+			t.Errorf("call %d: id %s dup %v", i, got.ID, dup)
+		}
+		wantLen := min(i+1, 2)
+		if len(readings) != wantLen {
+			t.Fatalf("call %d: %d readings, want %d", i, len(readings), wantLen)
+		}
 	}
 }
