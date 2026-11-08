@@ -51,7 +51,8 @@ paths:
       summary: Record a meter reading for a session.
       description: >-
         SES-2. Requires X-API-Key (API-1). Returns 201 for a new reading and
-        200 when the same reading was already recorded (duplicate).
+        200 when the same reading was already recorded (duplicate). A mirror
+        session returns 409 mirror_session (MIR-7).
       security:
         - ApiKeyAuth: []
       parameters:
@@ -83,7 +84,9 @@ paths:
     post:
       operationId: stopSession
       summary: Stop a session and return its cost breakdown.
-      description: SES-3. Requires X-API-Key (API-1).
+      description: >-
+        SES-3. Requires X-API-Key (API-1). A mirror session returns 409
+        mirror_session (MIR-7).
       security:
         - ApiKeyAuth: []
       parameters:
@@ -221,13 +224,19 @@ components:
     Session:
       type: object
       additionalProperties: false
-      required: [id, charger_id, status, started_at, stopped_at, energy_wh, total_cents, segments]
+      required: [id, charger_id, source, status, started_at, stopped_at, energy_wh, total_cents, segments]
       properties:
         id:
           type: string
           format: uuid
         charger_id:
           $ref: '#/components/schemas/ChargerId'
+        source:
+          type: string
+          enum: [api, mirror]
+          description: >-
+            Who writes the session (MIR-7). Sessions from the live mirror are
+            read-only through this API.
         status:
           type: string
           enum: [charging, stale, completed]
@@ -307,6 +316,7 @@ components:
                 - session_stopped
                 - stop_conflict
                 - active_session_exists
+                - mirror_session
                 - internal
             message:
               type: string

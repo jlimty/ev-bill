@@ -20,6 +20,7 @@ import (
 
 	"github.com/jlimty/ev-bill/internal/billing"
 	"github.com/jlimty/ev-bill/internal/server"
+	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
 	"github.com/jlimty/ev-bill/internal/testdb"
 )
@@ -55,19 +56,19 @@ func TestStatusPages_UI1_UI2_BIL5(t *testing.T) {
 	tariff := billing.SingaporeTariff()
 
 	// Completed mockup session: Peak 9600 Wh $5.95, Off-peak 8400 Wh $4.03, $9.98.
-	done, err := st.CreateSession(ctx, "CP-01", sgt(6, 21, 40), 0, fixedNow())
+	done, err := st.CreateSession(ctx, sessions.SourceAPI, "CP-01", sgt(6, 21, 40), 0, fixedNow())
 	must(t, "create CP-01", err)
 	for _, r := range []billing.Reading{{At: sgt(6, 22, 20), MeterWh: 4800}, {At: sgt(6, 23, 0), MeterWh: 9600}} {
-		_, _, _, err := st.AddReading(ctx, done.ID, r, fixedNow())
+		_, _, _, err := st.AddReading(ctx, sessions.SourceAPI, done.ID, r, fixedNow())
 		must(t, "add reading", err)
 	}
-	_, _, err = st.StopSession(ctx, done.ID, billing.Reading{At: sgt(7, 0, 15), MeterWh: 18000}, fixedNow())
+	_, _, err = st.StopSession(ctx, sessions.SourceAPI, done.ID, billing.Reading{At: sgt(7, 0, 15), MeterWh: 18000}, fixedNow())
 	must(t, "stop CP-01", err)
 
 	// Active session with a reading 10 minutes ago, so it is charging (SES-4).
-	active, err := st.CreateSession(ctx, "CP-02", sgt(7, 0, 0), 0, fixedNow())
+	active, err := st.CreateSession(ctx, sessions.SourceAPI, "CP-02", sgt(7, 0, 0), 0, fixedNow())
 	must(t, "create CP-02", err)
-	_, _, _, err = st.AddReading(ctx, active.ID, billing.Reading{At: sgt(7, 0, 10), MeterWh: 1000}, fixedNow())
+	_, _, _, err = st.AddReading(ctx, sessions.SourceAPI, active.ID, billing.Reading{At: sgt(7, 0, 10), MeterWh: 1000}, fixedNow())
 	must(t, "add CP-02 reading", err)
 
 	srv := httptest.NewServer(server.New(st, tariff, "test-key", fixedNow, slog.New(slog.NewTextHandler(io.Discard, nil))))

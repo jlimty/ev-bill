@@ -20,6 +20,7 @@ type segmentResponse struct {
 type sessionResponse struct {
 	ID         string            `json:"id"`
 	ChargerID  string            `json:"charger_id"`
+	Source     string            `json:"source"`
 	Status     string            `json:"status"`
 	StartedAt  time.Time         `json:"started_at"`
 	StoppedAt  *time.Time        `json:"stopped_at"`
@@ -58,6 +59,7 @@ func (s *Server) toResponse(sess sessions.Session, readings []billing.Reading, n
 	return sessionResponse{
 		ID:         sess.ID,
 		ChargerID:  sess.ChargerID,
+		Source:     string(sess.Source),
 		Status:     v.Status,
 		StartedAt:  sess.StartedAt.UTC(),
 		StoppedAt:  stoppedAt,
@@ -85,7 +87,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.Now()
-	sess, err := s.Store.CreateSession(r.Context(), *req.ChargerID, utcMicro(*req.StartedAt), *req.MeterStartWh, now)
+	sess, err := s.Store.CreateSession(r.Context(), sessions.SourceAPI, *req.ChargerID, utcMicro(*req.StartedAt), *req.MeterStartWh, now)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -103,7 +105,7 @@ func (s *Server) addMeterValue(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.Now()
 	reading := billing.Reading{At: utcMicro(*req.Timestamp), MeterWh: *req.MeterWh}
-	sess, readings, duplicate, err := s.Store.AddReading(r.Context(), r.PathValue("id"), reading, now)
+	sess, readings, duplicate, err := s.Store.AddReading(r.Context(), sessions.SourceAPI, r.PathValue("id"), reading, now)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -124,7 +126,7 @@ func (s *Server) stopSession(w http.ResponseWriter, r *http.Request) {
 	}
 	stop := billing.Reading{At: utcMicro(*req.StoppedAt), MeterWh: *req.MeterStopWh}
 	now := s.Now()
-	sess, readings, err := s.Store.StopSession(r.Context(), r.PathValue("id"), stop, now)
+	sess, readings, err := s.Store.StopSession(r.Context(), sessions.SourceAPI, r.PathValue("id"), stop, now)
 	if err != nil {
 		s.fail(w, r, err)
 		return

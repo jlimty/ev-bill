@@ -23,7 +23,7 @@ const (
 	meterReadingsPKConstr = "meter_readings_pkey"
 )
 
-const sessionColumns = `id::text, charger_id, started_at, meter_start_wh, stopped_at, meter_stop_wh`
+const sessionColumns = `id::text, charger_id, source, started_at, meter_start_wh, stopped_at, meter_stop_wh`
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
@@ -59,16 +59,19 @@ func (s *Store) Ping(ctx context.Context) error {
 	return nil
 }
 
-// CreateSession starts a session (SES-1). It fails with a Conflict
-// active_session_exists if the charger already has an active session.
-func (s *Store) CreateSession(ctx context.Context, chargerID string, startedAt time.Time, meterStartWh int64, now time.Time) (sessions.Session, error) {
+// CreateSession starts a session (SES-1) owned by as (MIR-7). It fails with a
+// Conflict active_session_exists if the charger already has an active session.
+func (s *Store) CreateSession(ctx context.Context, as sessions.Source, chargerID string, startedAt time.Time, meterStartWh int64, now time.Time) (sessions.Session, error) {
+	if !sessions.ValidSource(as) {
+		return sessions.Session{}, fmt.Errorf("create session: invalid source %q", as)
+	}
 	startedAt = norm(startedAt)
 	if err := sessions.CheckStart(chargerID, startedAt, meterStartWh, now); err != nil {
 		return sessions.Session{}, err
 	}
 	sess, err := scanSession(s.pool.QueryRow(ctx,
-		`INSERT INTO sessions (charger_id, started_at, meter_start_wh) VALUES ($1, $2, $3) RETURNING `+sessionColumns,
-		chargerID, startedAt, meterStartWh))
+		`INSERT INTO sessions (charger_id, source, started_at, meter_start_wh) VALUES ($1, $2, $3, $4) RETURNING `+sessionColumns,
+		chargerID, string(as), startedAt, meterStartWh))
 	if err != nil {
 		if rerr := mapUnique(err); rerr != nil {
 			return sessions.Session{}, rerr
@@ -78,11 +81,12 @@ func (s *Store) CreateSession(ctx context.Context, chargerID string, startedAt t
 	return sess, nil
 }
 
-// AddReading stores a meter reading (SES-2, SES-6) and returns the session with
-// its readings as of the end of the same transaction. The session row is locked
-// for the transaction, so concurrent calls for one session run one at a time
-// and an identical repeat is reported as duplicate, not stored twice.
-func (s *Store) AddReading(ctx context.Context, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error) {
+// AddReading stores a meter reading (SES-2, SES-6), refusing a writer that does
+// not own the session (MIR-7), and returns the session with its readings as of
+// the end of the same transaction. The session row is locked for the
+// transaction, so concurrent calls for one session run one at a time and an
+// identical repeat is reported as duplicate, not stored twice.
+func (s *Store) AddReading(ctx context.Context, as sessions.Source, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error) {
 	id, ok := parseUUID(id)
 	if !ok {
 		return sessions.Session{}, nil, false, sessions.ErrNotFound
@@ -97,6 +101,9 @@ func (s *Store) AddReading(ctx context.Context, id string, r billing.Reading, no
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		sess, rs, err := lockSession(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if err := sessions.CheckWriter(sess, as); err != nil {
 			return err
 		}
 		dup, err := sessions.CheckReading(sess, rs, r, now)
@@ -124,9 +131,10 @@ func (s *Store) AddReading(ctx context.Context, id string, r billing.Reading, no
 	return out, readings, duplicate, nil
 }
 
-// StopSession stops a session (SES-3). Repeating the identical stop returns
-// the stored session and readings unchanged.
-func (s *Store) StopSession(ctx context.Context, id string, stop billing.Reading, now time.Time) (sessions.Session, []billing.Reading, error) {
+// StopSession stops a session (SES-3), refusing a writer that does not own it
+// (MIR-7). Repeating the identical stop returns the stored session and readings
+// unchanged.
+func (s *Store) StopSession(ctx context.Context, as sessions.Source, id string, stop billing.Reading, now time.Time) (sessions.Session, []billing.Reading, error) {
 	id, ok := parseUUID(id)
 	if !ok {
 		return sessions.Session{}, nil, sessions.ErrNotFound
@@ -140,6 +148,9 @@ func (s *Store) StopSession(ctx context.Context, id string, stop billing.Reading
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		sess, rs, err := lockSession(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if err := sessions.CheckWriter(sess, as); err != nil {
 			return err
 		}
 		replay, err := sessions.CheckStop(sess, rs, stop, now)
@@ -295,7 +306,7 @@ func loadReadings(ctx context.Context, q querier, id string) ([]billing.Reading,
 
 func scanSession(row pgx.Row) (sessions.Session, error) {
 	var sess sessions.Session
-	if err := row.Scan(&sess.ID, &sess.ChargerID, &sess.StartedAt, &sess.MeterStartWh, &sess.StoppedAt, &sess.MeterStopWh); err != nil {
+	if err := row.Scan(&sess.ID, &sess.ChargerID, &sess.Source, &sess.StartedAt, &sess.MeterStartWh, &sess.StoppedAt, &sess.MeterStopWh); err != nil {
 		return sessions.Session{}, err
 	}
 	sess.StartedAt = sess.StartedAt.UTC()
