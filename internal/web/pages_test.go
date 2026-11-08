@@ -477,6 +477,13 @@ func TestTariffHeader_LIVE4(t *testing.T) {
 	if got := tariffHeader(other); got != want {
 		t.Errorf("tariffHeader(other) = %q, want %q", got, want)
 	}
+	// The bar legend uses the same per-window text.
+	if got := peakLegend(other); got != "Peak 08:00–22:00 · 70¢/kWh" {
+		t.Errorf("peakLegend(other) = %q", got)
+	}
+	if got := offPeakLegend(other); got != "Off-peak 22:00–08:00 · 40¢/kWh" {
+		t.Errorf("offPeakLegend(other) = %q", got)
+	}
 }
 
 // LIVE-4, MIR-12: a failure to count held connectors is a generic 500 page.
@@ -561,12 +568,51 @@ func TestDetail_LIVE4_ChargerContext(t *testing.T) {
 // LIVE-4: a failure to load the charger is a generic 500 detail page.
 func TestDetail_LIVE4_ChargerFailureIs500(t *testing.T) {
 	e := newEnv(t)
-	id := e.start("CP-01", sgt(0, 15, 7))
+	id := e.mirrorSession("SG-1", sgt(0, 0, 7), sgt(0, 10, 7), 100)
 	if _, err := e.pool.Exec(context.Background(), "DROP TABLE chargers"); err != nil {
 		t.Fatal(err)
 	}
 	wantHTML(t, e.get("/sessions/"+id), http.StatusInternalServerError)
 	if !strings.Contains(e.logs.String(), "get charger") {
 		t.Errorf("cause not logged: %q", e.logs.String())
+	}
+}
+
+// LIVE-4: charger details describe the mirror's real chargers, so they are
+// shown only for mirror sessions. An API session that uses the ID of a charger
+// with a chargers row shows no location, operator or power, on the list and
+// on the detail page, and keeps its simulated label.
+func TestPages_LIVE4_ChargerDetailsOnlyForMirror(t *testing.T) {
+	e := newEnv(t)
+	e.charger("SG-REAL-1", "Test Mall", "Testco", "AC", 7_400, false, sgt(0, 18, 7))
+	id := e.start("SG-REAL-1", sgt(0, 15, 7))
+
+	list := e.get("/").Body.String()
+	wantContains(t, list, `>SG-REAL-1</a> <span class="source simulated">simulated</span>`)
+	detail := e.get("/sessions/" + id).Body.String()
+	wantContains(t, detail, `<span class="source simulated">simulated</span>`)
+	for name, body := range map[string]string{"list": list, "detail": detail} {
+		for _, absent := range []string{"Test Mall", "Testco", "7.4 kW", `class="source mirror"`} {
+			if strings.Contains(body, absent) {
+				t.Errorf("LIVE-4: %s page shows %q for an API session", name, absent)
+			}
+		}
+	}
+}
+
+// LIVE-4: the detail page's bar has a legend: a swatch per tariff window with
+// its hours and rate, built from the tariff's values like the header.
+func TestDetail_LIVE4_BarLegend(t *testing.T) {
+	e := newEnv(t)
+	id := e.mockup("CP-01")
+	wantContains(t, e.get("/sessions/"+id).Body.String(),
+		`<ul class="legend" aria-label="Bar legend">`,
+		`<li><span class="swatch peak"></span>Peak 07:00–23:00 · 62¢/kWh</li>`,
+		`<li><span class="swatch offpeak"></span>Off-peak 23:00–07:00 · 48¢/kWh</li>`)
+
+	// No bar, no legend.
+	active := e.start("CP-02", sgt(0, 15, 7))
+	if body := e.get("/sessions/" + active).Body.String(); strings.Contains(body, `class="legend"`) {
+		t.Errorf("LIVE-4: legend shown without a bar")
 	}
 }

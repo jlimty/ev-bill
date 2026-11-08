@@ -105,11 +105,17 @@ type tableRow struct {
 	Label, Times, Energy, Rate, Cost string
 }
 
+// barLegend labels the bar's two colours with the tariff windows (LIVE-4).
+type barLegend struct {
+	Peak, OffPeak string
+}
+
 type detailPage struct {
 	layoutData
 	Charger, Source, Status, Started, Stopped string
 	Location, Operator, Power, Notice         string
 	Bar                                       []barSeg
+	Legend                                    barLegend
 	Rows                                      []tableRow
 	Energy, Total                             string
 }
@@ -139,10 +145,19 @@ var estimateNotice = "Mirrored chargers: energy and cost are estimates at rated 
 // tariffHeader describes the tariff from its own values (LIVE-4), e.g.
 // "Peak 07:00–23:00 · 62¢/kWh · Off-peak 23:00–07:00 · 48¢/kWh · Singapore time".
 func tariffHeader(t billing.Tariff) string {
-	peak := fmt.Sprintf("%02d:00–%02d:00", t.PeakStartHour, t.PeakEndHour)
-	offPeak := fmt.Sprintf("%02d:00–%02d:00", t.PeakEndHour, t.PeakStartHour)
-	return fmt.Sprintf("Peak %s · %d¢/kWh · Off-peak %s · %d¢/kWh · %s time",
-		peak, t.PeakRateCentsPerKWh, offPeak, t.OffPeakRateCentsPerKWh, zoneCity(t.Location))
+	return peakLegend(t) + " · " + offPeakLegend(t) + " · " + zoneCity(t.Location) + " time"
+}
+
+// peakLegend describes the peak window from the tariff's values (LIVE-4):
+// "Peak 07:00–23:00 · 62¢/kWh". The header and the bar legend both use it.
+func peakLegend(t billing.Tariff) string {
+	return fmt.Sprintf("Peak %02d:00–%02d:00 · %d¢/kWh", t.PeakStartHour, t.PeakEndHour, t.PeakRateCentsPerKWh)
+}
+
+// offPeakLegend describes the off-peak window from the tariff's values
+// (LIVE-4): "Off-peak 23:00–07:00 · 48¢/kWh".
+func offPeakLegend(t billing.Tariff) string {
+	return fmt.Sprintf("Off-peak %02d:00–%02d:00 · %d¢/kWh", t.PeakEndHour, t.PeakStartHour, t.OffPeakRateCentsPerKWh)
 }
 
 // zoneCity is the city part of a zone name: "Asia/Kuala_Lumpur" -> "Kuala Lumpur".
@@ -161,6 +176,12 @@ func sourceLabel(s sessions.Source) string {
 	}
 	return sourceSimulated
 }
+
+// showsCharger reports whether a session's page shows its charger's details
+// (LIVE-4). Only mirror sessions do: the chargers table describes the real
+// chargers the mirror watches, and an API session that happens to use one's
+// ID is simulated, not a session on that charger.
+func showsCharger(s sessions.Session) bool { return s.Source == sessions.SourceMirror }
 
 // chargerPower formats a charger's rated power and current, e.g. "7.4 kW AC".
 func chargerPower(c *store.ChargerRow) string {
@@ -205,7 +226,7 @@ func (p *Pages) listData(ctx context.Context) (listPage, error) {
 			Energy:  FormatWh(v.Bill.EnergyWh),
 			Cost:    FormatCents(v.Bill.TotalCents),
 		}
-		if c := it.Charger; c != nil {
+		if c := it.Charger; c != nil && showsCharger(it.Session) {
 			row.Location = c.LocationName
 			row.Info = joinNonEmpty(" · ", c.Operator, chargerPower(c))
 		}
@@ -295,11 +316,6 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 		return detailPage{}, fmt.Errorf("build view: %w", err)
 	}
 
-	charger, found, err := p.Store.Charger(ctx, sess.ChargerID)
-	if err != nil {
-		return detailPage{}, err
-	}
-
 	stream := ""
 	if v.Status != sessions.StatusCompleted {
 		stream = "view=session&id=" + url.QueryEscape(sess.ID)
@@ -313,14 +329,19 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 		Stopped:    "-",
 		Energy:     FormatWh(v.Bill.EnergyWh),
 		Total:      FormatCents(v.Bill.TotalCents),
+		Legend:     barLegend{Peak: peakLegend(p.Tariff), OffPeak: offPeakLegend(p.Tariff)},
 	}
 	if sess.StoppedAt != nil {
 		data.Stopped = p.clock(*sess.StoppedAt, true)
 	}
-	if found {
-		data.Location, data.Operator, data.Power = charger.LocationName, charger.Operator, chargerPower(&charger)
-	}
-	if sess.Source == sessions.SourceMirror {
+	if showsCharger(sess) {
+		charger, found, err := p.Store.Charger(ctx, sess.ChargerID)
+		if err != nil {
+			return detailPage{}, err
+		}
+		if found {
+			data.Location, data.Operator, data.Power = charger.LocationName, charger.Operator, chargerPower(&charger)
+		}
 		data.Notice = estimateNotice
 	}
 	widths := BarWidths(v.Bill.Segments)
