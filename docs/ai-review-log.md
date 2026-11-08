@@ -24,19 +24,22 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 18 | 2026-11-08 | Task 10 / OPS-3 | When graceful shutdown timed out, `Serve` returned without force-closing the server, so a stuck request could keep its database connection and hold the process past the 10 s limit | review | `srv.Close()` after a failed `Shutdown`, its error logged | Test: a stuck handler's request context is cancelled once `Serve` returns |
 | 19 | 2026-11-08 | Task 6 / OPS-4, SES-6 | The store's database-failure branches had no tests, so coverage of new code was 74.9% against the gate's 80% minimum | sonar | Tests that make the database fail (cancelled context, closed pool, missing table) and check every store method returns a plain error the API turns into a 500; `internal/testdb` excluded from Sonar coverage because it only runs under tests | Sonar's coverage-on-new-code condition stays in the gate |
 | 20 | 2026-11-08 | Task 10 / OPS-3 | Coverage of new code was 78.7% (shutdown and logging edge cases untested), and Sonar rule `godre:S8239` fired: the shutdown context was built from `context.Background()` instead of the available `ctx` | sonar | `context.WithoutCancel(ctx)` for the shutdown context; tests for a failing listener, Flush through the request logger, first-status-wins and a failed `/healthz` write | Sonar's coverage-on-new-code condition and rule set stay in the gate |
+| 21 | 2026-11-08 | Task 5, 8 / SES-1, API-2 | `started_at` had no lower bound, so a start in year 0 at +08:00 (year −1 in UTC) was stored; Go cannot encode that time as JSON, and because the handler wrote the status before encoding, every later list request returned an empty 200 | review | Starts before 2000-01-01 UTC are rejected with 422; JSON is encoded before the status is written, so an encoding failure is a logged 500 | Test: the year-0 start is rejected and the list stays valid |
+| 22 | 2026-11-08 | Task 11 / API-1 | The simulator used `$API_KEY` as the `-key` flag's default, so its usage text printed the key | review | The flag defaults to empty and falls back to the environment after parsing | Test: usage output never contains the key |
+| 23 | 2026-11-08 | Task 9 / UI-1, SES-4 | The status-page tests looked for the words "stale", "charging" and "completed", which always appear in the page's CSS, so a wrong status still passed | review (manual mutation) | Tests assert the rendered status badge element | Test, shown failing with a wrong status |
 
 ## Tally
 
-Rows counted by the "Caught by" column (20 rows):
+Rows counted by the "Caught by" column (23 rows):
 
 | Caught by | Rows | Count |
 |---|---|---|
-| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18 | 12 |
-| review (manual mutation) | 7, 12, 13, 16 | 4 |
+| review | 1, 2, 3, 5, 6, 9, 10, 11, 14, 15, 17, 18, 21, 22 | 14 |
+| review (manual mutation) | 7, 12, 13, 16, 23 | 5 |
 | sonar | 4, 8, 19, 20 | 4 |
 | test, lint, scan, mutation | none | 0 |
 
-Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17). Rows 3, 14 and 17 are "none" decisions; 14 and 17 give a reason, 3 does not.
+Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17). Rows 3, 14 and 17 are "none" decisions; 14 and 17 give a reason, 3 does not.
 
 ## Mutation baseline
 

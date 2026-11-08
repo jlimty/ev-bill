@@ -3,10 +3,10 @@ package sim
 
 import (
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/sessions"
 )
 
 // Plan is one charger's session: it starts at Start, reports a reading every
@@ -20,16 +20,12 @@ type Plan struct {
 	MeterStartWh int64
 }
 
-const (
-	// MaxPoints caps the readings in one plan so a tiny interval cannot make
-	// Points allocate without bound.
-	MaxPoints = 10_000
-	// maxMeterWh is the API's MeterWh maximum (api/openapi.yaml).
-	maxMeterWh = 1_000_000_000_000_000
-)
+// MaxPoints caps the readings in one plan so a tiny interval cannot make
+// Points allocate without bound.
+const MaxPoints = 10_000
 
-// chargerIDPattern is the contract's ChargerId pattern.
-var chargerIDPattern = regexp.MustCompile(`^[A-Z0-9-]{1,32}$`)
+// maxMeterWh is the API's MeterWh maximum, shared with the server's rules.
+const maxMeterWh = sessions.MaxMeterWh
 
 // Points returns the readings for p: the first is the start point, then one
 // every Interval, and the last is exactly Start+Duration, so an uneven
@@ -61,12 +57,14 @@ func Validate(p Plan, speed int, now time.Time) error {
 	switch {
 	case speed < 1:
 		return fmt.Errorf("speed must be at least 1, got %d", speed)
-	case !chargerIDPattern.MatchString(p.ChargerID):
-		return fmt.Errorf("charger id %q must match %s", p.ChargerID, chargerIDPattern)
+	case !sessions.ValidChargerID(p.ChargerID):
+		return fmt.Errorf("charger id %q must be 1 to 32 characters of A-Z, 0-9 or -", p.ChargerID)
 	case p.Interval <= 0:
 		return fmt.Errorf("%s: interval must be positive, got %s", p.ChargerID, p.Interval)
 	case p.Duration <= 0:
 		return fmt.Errorf("%s: duration must be positive, got %s", p.ChargerID, p.Duration)
+	case p.Duration > sessions.MaxDuration:
+		return fmt.Errorf("%s: duration %s is over the %s session limit (SES-5)", p.ChargerID, p.Duration, sessions.MaxDuration)
 	case p.PowerW < 0:
 		return fmt.Errorf("%s: power must not be negative, got %d W", p.ChargerID, p.PowerW)
 	case p.MeterStartWh < 0:
@@ -91,7 +89,7 @@ func Validate(p Plan, speed int, now time.Time) error {
 // checked as a division so PowerW × secs is never computed and cannot overflow.
 func checkFinalMeter(p Plan) error {
 	if p.MeterStartWh > maxMeterWh {
-		return fmt.Errorf("%s: meter start %d Wh exceeds the API limit %d", p.ChargerID, p.MeterStartWh, int64(maxMeterWh))
+		return fmt.Errorf("%s: meter start %d Wh exceeds the API limit %d", p.ChargerID, p.MeterStartWh, maxMeterWh)
 	}
 	secs := int64(p.Duration / time.Second)
 	if secs == 0 {
@@ -99,7 +97,7 @@ func checkFinalMeter(p Plan) error {
 	}
 	limit := ((maxMeterWh-p.MeterStartWh+1)*3600 - 1) / secs // largest PowerW that fits
 	if p.PowerW > limit {
-		return fmt.Errorf("%s: %d W for %s would push the meter past the API limit %d Wh", p.ChargerID, p.PowerW, p.Duration, int64(maxMeterWh))
+		return fmt.Errorf("%s: %d W for %s would push the meter past the API limit %d Wh", p.ChargerID, p.PowerW, p.Duration, maxMeterWh)
 	}
 	return nil
 }

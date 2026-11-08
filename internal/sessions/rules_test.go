@@ -64,6 +64,9 @@ func TestCheckStart_SES1(t *testing.T) {
 		{"R3 meter over cap", "CP-01", now, 1_000_000_000_000_001, KindInvalid, "invalid_reading"},
 		{"skew exactly 5m ok", "CP-01", now.Add(5 * time.Minute), 0, 0, ""},
 		{"skew 6m", "CP-01", now.Add(6 * time.Minute), 0, KindInvalid, "invalid_reading"},
+		{"earliest start 2000-01-01Z ok", "CP-01", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), 0, 0, ""},
+		{"one ns before earliest start", "CP-01", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Nanosecond), 0, KindInvalid, "invalid_reading"},
+		{"year 0 with +08:00 offset", "CP-01", time.Date(0, 1, 1, 0, 0, 0, 0, time.FixedZone("", 8*3600)), 0, KindInvalid, "invalid_reading"},
 	}
 	for _, c := range cases {
 		err := CheckStart(c.charger, c.start, c.meter, now)

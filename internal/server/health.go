@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/jlimty/ev-bill/internal/reqid"
 )
 
 // Pinger is what Health needs from the database.
@@ -22,13 +24,13 @@ func Health(p Pinger, timeout time.Duration, l *slog.Logger) http.Handler {
 
 		status, body := http.StatusOK, "ok"
 		if err := p.Ping(ctx); err != nil {
-			l.Error("health check failed", "error", err)
+			reqid.Logger(r.Context(), l).Error("health check failed", "error", err)
 			status, body = http.StatusServiceUnavailable, "unavailable"
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": body}); err != nil {
-			l.Error("write health response", "error", err)
+			reqid.Logger(r.Context(), l).Error("write health response", "error", err)
 		}
 	})
 }

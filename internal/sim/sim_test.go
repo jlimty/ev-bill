@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -102,8 +103,8 @@ func TestValidate(t *testing.T) {
 		{"zero duration", func(p *Plan) { p.Duration = 0 }, 1, end, true},
 		{"negative power", func(p *Plan) { p.PowerW = -1 }, 1, end, true},
 		{"negative meter start", func(p *Plan) { p.MeterStartWh = -1 }, 1, end, true},
-		{"too many points", func(p *Plan) { p.Duration = 10_001 * time.Minute; p.Interval = time.Minute }, 1, end.Add(24 * 365 * time.Hour), true},
-		{"exactly max points", func(p *Plan) { p.Duration = 10_000 * time.Minute; p.Interval = time.Minute }, 1, end, false},
+		{"too many points", func(p *Plan) { p.Duration = 48 * time.Hour; p.Interval = 17 * time.Second }, 1, end.Add(72 * time.Hour), true},
+		{"exactly max points", func(p *Plan) { p.Duration = 48 * time.Hour; p.Interval = 17280 * time.Millisecond }, 1, end.Add(72 * time.Hour), false},
 		{"final meter at the cap", func(p *Plan) { p.Duration = time.Hour; p.PowerW = 1_000_000_000_000_000 }, 1, end, false},
 		{"final meter over the cap", func(p *Plan) { p.Duration = time.Hour; p.PowerW = 1_000_000_000_000_001 }, 1, end, true},
 		{"meter start plus energy over the cap", func(p *Plan) { p.Duration = time.Hour; p.MeterStartWh = 1; p.PowerW = 1_000_000_000_000_000 }, 1, end, true},
@@ -113,6 +114,8 @@ func TestValidate(t *testing.T) {
 		{"empty charger", func(p *Plan) { p.ChargerID = "" }, 1, end, true},
 		{"33-char charger", func(p *Plan) { p.ChargerID = strings.Repeat("A", 33) }, 1, end, true},
 		{"32-char charger", func(p *Plan) { p.ChargerID = strings.Repeat("A", 32) }, 1, end, false},
+		{"SES-5 duration over 48h", func(p *Plan) { p.Duration = 48*time.Hour + time.Second; p.Interval = time.Hour }, 1, end.Add(72 * time.Hour), true},
+		{"SES-5 duration exactly 48h", func(p *Plan) { p.Duration = 48 * time.Hour; p.Interval = time.Hour }, 1, end.Add(72 * time.Hour), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -323,9 +326,10 @@ func TestRun_ErrorCodeSurfaces(t *testing.T) {
 	if !errors.As(err, &ae) || ae.Status != 422 || ae.Code != "invalid_reading" {
 		t.Errorf("errors.As APIError = %+v", ae)
 	}
-	// The plan's loop stops at its first error: start plus one failed reading, no stop.
-	if got := len(f.snapshot()); got != 2 {
-		t.Errorf("requests = %d, want 2", got)
+	// The plan's loop stops at its first error: start plus one failed reading,
+	// then the best-effort stop (see TestRun_FailedPlanStopsSessionAtLastAcceptedPoint).
+	if got := len(f.snapshot()); got != 3 {
+		t.Errorf("requests = %d, want 3", got)
 	}
 }
 
@@ -425,5 +429,161 @@ func TestRun_RejectsFutureReplayBeforeAnyRequest(t *testing.T) {
 	}
 	if got := len(f.snapshot()); got != 0 {
 		t.Errorf("%d requests sent, want 0", got)
+	}
+}
+
+// Timestamps keep sub-second precision (in UTC) so short intervals do not collide.
+func TestClient_TimestampsKeepSubSecondPrecision(t *testing.T) {
+	f := &fakeAPI{t: t}
+	c := newClient(t, f)
+	at := time.Date(2026, 11, 6, 21, 40, 0, 500_000_000, sgt)
+	id, err := c.Start(context.Background(), "CP-01", at, 0)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := c.MeterValue(context.Background(), id, at.Add(250*time.Millisecond), 1); err != nil {
+		t.Fatalf("MeterValue: %v", err)
+	}
+	if err := c.Stop(context.Background(), id, at.Add(750*time.Millisecond), 2); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	reqs := f.snapshot()
+	want := []struct{ key, val string }{
+		{"started_at", "2026-11-06T13:40:00.5Z"},
+		{"timestamp", "2026-11-06T13:40:00.75Z"},
+		{"stopped_at", "2026-11-06T13:40:01.25Z"},
+	}
+	for i, w := range want {
+		if got := reqs[i].Body[w.key]; got != w.val {
+			t.Errorf("request %d %s = %v, want %s", i, w.key, got, w.val)
+		}
+	}
+}
+
+// failOnMeter answers the nth meter-values call with 422 and delegates the rest.
+func failOnMeter(t *testing.T, f *fakeAPI, nth int, stopCode string) http.Handler {
+	var mu sync.Mutex
+	meters := 0
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/meter-values") {
+			mu.Lock()
+			meters++
+			n := meters
+			mu.Unlock()
+			if n == nth {
+				reply(t, w, http.StatusUnprocessableEntity, `{"error":{"code":"invalid_reading","message":"nope"}}`)
+				return
+			}
+		}
+		if stopCode != "" && strings.HasSuffix(r.URL.Path, "/stop") {
+			reply(t, w, http.StatusInternalServerError, `{"error":{"code":"`+stopCode+`","message":"no"}}`)
+			return
+		}
+		f.ServeHTTP(w, r)
+	})
+}
+
+// SES-3: when a plan fails after its session started, the simulator stops the
+// session at the last point the server accepted, so the charger is not left active.
+func TestRun_FailedPlanStopsSessionAtLastAcceptedPoint(t *testing.T) {
+	f := &fakeAPI{t: t}
+	c := newClient(t, failOnMeter(t, f, 2, ""))
+	plans := plansFor("CP-01")
+	err := Run(context.Background(), c, plans, 1_000_000)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != "invalid_reading" {
+		t.Fatalf("Run err = %v, want the original invalid_reading error", err)
+	}
+	reqs := f.snapshot() // start, accepted reading 1, (reading 2 rejected, not recorded), stop
+	if len(reqs) != 3 {
+		t.Fatalf("requests = %d, want 3: %+v", len(reqs), reqs)
+	}
+	pts := Points(plans[0])
+	stop := reqs[2]
+	if !strings.HasSuffix(stop.Path, "/stop") {
+		t.Fatalf("last request = %s, want a stop", stop.Path)
+	}
+	if got := stop.Body["stopped_at"]; got != ts(pts[1].At) {
+		t.Errorf("stopped_at = %v, want %s (last accepted point)", got, ts(pts[1].At))
+	}
+	if got := int64(stop.Body["meter_stop_wh"].(float64)); got != pts[1].MeterWh {
+		t.Errorf("meter_stop_wh = %d, want %d", got, pts[1].MeterWh)
+	}
+}
+
+// When the best-effort stop fails too, the original error is still returned and
+// the stop failure is logged, not hidden.
+func TestRun_FailedStopAttemptIsLoggedOriginalErrorReturned(t *testing.T) {
+	f := &fakeAPI{t: t}
+	c := newClient(t, failOnMeter(t, f, 1, "stop_exploded"))
+	var logs strings.Builder
+	c.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	err := Run(context.Background(), c, plansFor("CP-01"), 1_000_000)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != "invalid_reading" {
+		t.Fatalf("Run err = %v, want invalid_reading", err)
+	}
+	if strings.Contains(err.Error(), "stop_exploded") {
+		t.Errorf("stop failure replaced the original error: %v", err)
+	}
+	if !strings.Contains(logs.String(), "stop_exploded") || !strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("stop failure not logged: %q", logs.String())
+	}
+}
+
+// A plan whose start was rejected has no session, so nothing is stopped.
+func TestRun_FailedStartSendsNoStop(t *testing.T) {
+	f := &fakeAPI{t: t, failPath: "/api/sessions"}
+	c := newClient(t, f)
+	if err := Run(context.Background(), c, plansFor("CP-01"), 1_000_000); err == nil {
+		t.Fatal("Run succeeded, want error")
+	}
+	if got := len(f.snapshot()); got != 1 {
+		t.Errorf("requests = %d, want only the rejected start", got)
+	}
+}
+
+// cancelAfterStart cancels a context once the start response has been fully
+// read, so the cancel lands deterministically after the session exists.
+type cancelAfterStart struct {
+	base   http.RoundTripper
+	cancel func()
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel func()
+}
+
+func (b cancelOnClose) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
+func (t cancelAfterStart) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(r)
+	if err == nil && r.URL.Path == "/api/sessions" {
+		resp.Body = cancelOnClose{resp.Body, t.cancel}
+	}
+	return resp, err
+}
+
+// SES-3: cancelling mid-run still stops the started session, using a context
+// that is not cancelled.
+func TestRun_CancelStopsStartedSession(t *testing.T) {
+	f := &fakeAPI{t: t}
+	c := newClient(t, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.HTTP = &http.Client{Transport: cancelAfterStart{base: http.DefaultTransport, cancel: cancel}}
+	p := plansFor("CP-01")[0]
+	p.Interval, p.Duration, p.Start = time.Hour, 5*time.Hour, time.Now().Add(-10*time.Hour)
+	if err := Run(ctx, c, []Plan{p}, 1); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	reqs := f.snapshot()
+	if len(reqs) != 2 || !strings.HasSuffix(reqs[1].Path, "/stop") {
+		t.Errorf("requests = %+v, want start then stop", reqs)
 	}
 }

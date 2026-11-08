@@ -43,10 +43,9 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 
-	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	poolCfg, err := newPoolConfig(cfg.DatabaseURL)
 	if err != nil {
-		// Do not wrap the parse error's text beyond this: it can echo the URL.
-		return errors.New("parse DATABASE_URL: invalid connection string")
+		return err
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -72,4 +71,18 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	}
 	logger.Info("server stopped")
 	return nil
+}
+
+// maxConns caps the pool. Free-tier Postgres allows about 100 connections; 10
+// leaves room for a second instance during a deploy overlap.
+const maxConns = 10
+
+func newPoolConfig(databaseURL string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		// Do not wrap the parse error's text beyond this: it can echo the URL.
+		return nil, errors.New("parse DATABASE_URL: invalid connection string")
+	}
+	cfg.MaxConns = maxConns
+	return cfg, nil
 }

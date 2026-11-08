@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/jlimty/ev-bill/internal/reqid"
 	"github.com/jlimty/ev-bill/internal/sessions"
 )
 
@@ -44,7 +45,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 			return
 		}
 	}
-	s.Logger.Error("request failed", "method", r.Method, "path", r.URL.Path, "error", err)
+	reqid.Logger(r.Context(), s.Logger).Error("request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 	writeJSON(s.Logger, w, http.StatusInternalServerError, errorBody("internal", "internal error"))
 }
 

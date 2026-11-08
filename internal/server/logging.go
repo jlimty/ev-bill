@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/jlimty/ev-bill/internal/reqid"
 )
 
 var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -29,7 +31,9 @@ func (r *statusRecorder) WriteHeader(code int) {
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
-// RequestLogger writes one JSON log line per request (OPS-5). It reuses a
+// RequestLogger writes one JSON log line per request (OPS-5), at Debug for a
+// successful GET /healthz. It puts the request ID in the request context for
+// the handlers' own logs (see package reqid). It reuses a
 // well-formed incoming X-Request-ID, otherwise generates one, and echoes the
 // ID in the response header. The query string is never logged.
 func RequestLogger(l *slog.Logger, next http.Handler) http.Handler {
@@ -46,9 +50,15 @@ func RequestLogger(l *slog.Logger, next http.Handler) http.Handler {
 		w.Header().Set("X-Request-ID", id)
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
+		next.ServeHTTP(rec, r.WithContext(reqid.With(r.Context(), id)))
 
-		l.Info("request",
+		// Successful health checks come every few seconds from the platform;
+		// keep them out of the Info stream.
+		level := slog.LevelInfo
+		if r.Method == http.MethodGet && r.URL.Path == "/healthz" && rec.status < 400 {
+			level = slog.LevelDebug
+		}
+		l.Log(r.Context(), level, "request",
 			"request_id", id,
 			"method", r.Method,
 			"path", r.URL.Path,

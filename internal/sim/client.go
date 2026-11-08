@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -20,6 +21,15 @@ const DefaultTimeout = 90 * time.Second
 type Client struct {
 	BaseURL, APIKey string
 	HTTP            *http.Client
+	// Logger receives the simulator's own warnings; nil means slog.Default().
+	Logger *slog.Logger
+}
+
+func (c *Client) logger() *slog.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return slog.Default()
 }
 
 // NewClient returns a Client with the default 90 s timeout.
@@ -41,7 +51,8 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("api returned status %d: %s", e.Status, e.Code)
 }
 
-func ts(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+// ts formats t in UTC with sub-second precision, so short intervals stay distinct.
+func ts(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
 // Start opens a session and returns its id (SES-1).
 func (c *Client) Start(ctx context.Context, chargerID string, startedAt time.Time, meterStartWh int64) (string, error) {

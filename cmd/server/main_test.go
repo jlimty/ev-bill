@@ -18,3 +18,17 @@ func TestRun_OPS1_MissingConfig(t *testing.T) {
 		}
 	}
 }
+
+// The pool is capped at 10 connections so a deploy overlap fits the free-tier limit.
+func TestNewPoolConfig_MaxConns(t *testing.T) {
+	cfg, err := newPoolConfig("postgres://u:pw@localhost:5432/db?sslmode=disable")
+	if err != nil {
+		t.Fatalf("newPoolConfig: %v", err)
+	}
+	if cfg.MaxConns != 10 {
+		t.Errorf("MaxConns = %d, want 10", cfg.MaxConns)
+	}
+	if _, err := newPoolConfig("::bad pw-secret"); err == nil || strings.Contains(err.Error(), "pw-secret") {
+		t.Errorf("bad URL error = %v, want a generic error that does not echo the URL", err)
+	}
+}

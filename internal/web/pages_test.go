@@ -99,6 +99,12 @@ func wantHTML(t *testing.T, rec *httptest.ResponseRecorder, status int) {
 	}
 }
 
+// badge is the status badge markup. The CSS class names are also status words,
+// so a bare substring check would pass whatever status was rendered.
+func badge(status string) string {
+	return `<span class="badge ` + status + `">` + status + `</span>`
+}
+
 const refreshMeta = `<meta http-equiv="refresh" content="3">`
 
 // UI-1: newest first, status text, energy and cost, links, 3 s refresh.
@@ -111,8 +117,8 @@ func TestListPage_UI1(t *testing.T) {
 	rec := e.get("/")
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	wantContains(t, body, refreshMeta, "completed", "charging", "$9.98", "18.0 kWh", "1.0 kWh",
-		"07 Nov 00:15", `href="/sessions/`+newID+`"`)
+	wantContains(t, body, refreshMeta, badge("completed"), badge("charging"), "$9.98", "18.0 kWh", "1.0 kWh",
+		"06 Nov 2026 21:40", "07 Nov 2026 00:15", `href="/sessions/`+newID+`"`)
 	if strings.Index(body, "CP-NEW") > strings.Index(body, "CP-OLD") || !strings.Contains(body, "CP-NEW") {
 		t.Errorf("CP-NEW must appear before CP-OLD")
 	}
@@ -132,7 +138,7 @@ func TestDetailPage_UI2_MockupSession(t *testing.T) {
 	rec := e.get("/sessions/" + id)
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	wantContains(t, body, "CP-01", "completed", "Peak", "Off-peak", "21:40", "23:00", "00:15",
+	wantContains(t, body, "CP-01", badge("completed"), "06 Nov 2026 21:40", "07 Nov 2026 00:15", "Peak", "Off-peak", "21:40", "23:00", "00:15",
 		"$5.95", "$4.03", "$9.98", "9.6 kWh", "8.4 kWh", "18.0 kWh", "62", "48",
 		`style="width: 51.6%"`, `style="width: 48.4%"`)
 	if strings.Count(body, `class="seg `) != 2 {
@@ -159,7 +165,7 @@ func TestDetailPage_ActiveWithoutReadings(t *testing.T) {
 	rec := e.get("/sessions/" + id)
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	wantContains(t, body, "0.0 kWh", "$0.00", "charging")
+	wantContains(t, body, "0.0 kWh", "$0.00", badge("charging"))
 	if strings.Contains(body, `class="bar"`) {
 		t.Errorf("no bar element expected without segments")
 	}
@@ -169,7 +175,7 @@ func TestDetailPage_ActiveWithoutReadings(t *testing.T) {
 func TestDetailPage_StaleStatus(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-01", sgt(21, 40, 6))
-	wantContains(t, e.get("/sessions/"+id).Body.String(), "stale")
+	wantContains(t, e.get("/sessions/"+id).Body.String(), badge("stale"))
 }
 
 // UI-2: unknown and malformed ids are an HTML 404.
@@ -212,5 +218,42 @@ func TestTemplates_EscapeValues(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "<script>x") || strings.Contains(buf.String(), "<b>") {
 		t.Errorf("unescaped output: %s", buf.String())
+	}
+}
+
+// Every page response, including 404 and 500, carries the security headers.
+func TestPages_SecurityHeaders(t *testing.T) {
+	e := newEnv(t)
+	id := e.mockup("CP-01")
+	const wantCSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+	for _, path := range []string{"/", "/sessions/" + id, "/sessions/not-a-uuid"} {
+		rec := e.get(path)
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options = %q", path, got)
+		}
+		if got := rec.Header().Get("Content-Security-Policy"); got != wantCSP {
+			t.Errorf("%s: Content-Security-Policy = %q", path, got)
+		}
+	}
+	e.pool.Close()
+	rec := e.get("/")
+	wantHTML(t, rec, http.StatusInternalServerError)
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Content-Security-Policy") != wantCSP {
+		t.Errorf("500 page lacks the security headers: %v", rec.Header())
+	}
+}
+
+// The CSP forbids scripts and external resources, so the pages must not need
+// any: only inline CSS and the style attribute are used.
+func TestPages_NeedNoScriptOrExternalResources(t *testing.T) {
+	e := newEnv(t)
+	id := e.mockup("CP-01")
+	for _, path := range []string{"/", "/sessions/" + id} {
+		body := strings.ToLower(e.get(path).Body.String())
+		for _, banned := range []string{"<script", "<link", "<img", "<iframe", "src=", "@import", "url("} {
+			if strings.Contains(body, banned) {
+				t.Errorf("%s: page contains %q, which the CSP would block", path, banned)
+			}
+		}
 	}
 }

@@ -506,3 +506,44 @@ func TestUnroutedAPIPathsAreJSON404(t *testing.T) {
 		}
 	}
 }
+
+// SES-1: a start before the earliest supported date is 422 invalid_reading, and
+// the session list still answers with a valid JSON body afterwards.
+func TestStart_YearZeroIs422AndListStaysValid(t *testing.T) {
+	e := newEnv(t)
+	rec := e.post("/api/sessions", startBody("CP-01", "0000-01-01T00:00:00+08:00", 0))
+	wantError(t, rec, http.StatusUnprocessableEntity, "invalid_reading")
+
+	list := e.get("/api/sessions")
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d", list.Code)
+	}
+	var body struct {
+		Sessions []sessionBody `json:"sessions"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &body); err != nil {
+		t.Fatalf("list body %q is not valid JSON: %v", list.Body.String(), err)
+	}
+	if len(body.Sessions) != 0 {
+		t.Errorf("list has %d sessions, want 0", len(body.Sessions))
+	}
+}
+
+// API-2: a value JSON cannot encode becomes a generic 500 internal, sent before
+// any success status, and the cause is logged.
+func TestWriteJSON_EncodeFailureIsGeneric500(t *testing.T) {
+	logs := &bytes.Buffer{}
+	rec := httptest.NewRecorder()
+	writeJSON(slog.New(slog.NewTextHandler(logs, nil)), rec, http.StatusCreated,
+		time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)) // outside the years JSON can encode
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	want := `{"error":{"code":"internal","message":"internal error"}}` + "\n"
+	if rec.Body.String() != want {
+		t.Errorf("body = %q, want %q", rec.Body.String(), want)
+	}
+	if !strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("encode failure not logged: %q", logs.String())
+	}
+}
