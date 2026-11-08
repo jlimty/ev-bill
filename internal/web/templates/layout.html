@@ -69,7 +69,7 @@ dd { margin:0; }
 .legend { display:flex; flex-wrap:wrap; gap:.25rem 1.25rem; list-style:none; margin:.75rem 0 0; padding:0; font-size:.85rem; color:var(--muted); }
 .legend li { display:flex; align-items:center; gap:.4rem; }
 .swatch { display:inline-block; width:.9rem; height:.9rem; border-radius:3px; }
-.swatch.peak { background:var(--peak); }
+.swatch.peak { background:var(--peak); border:1px solid var(--peak-ink); }
 .swatch.offpeak { background:var(--off); }
 .empty { text-align:center; color:var(--muted); padding:2rem 1rem; white-space:normal; }
 .source { display:inline-block; padding:0 .4rem; border-radius:4px; font-size:.75rem; font-weight:600; vertical-align:middle; }
@@ -77,7 +77,7 @@ dd { margin:0; }
 .source.simulated { color:#4b5563; background:#eef0f3; }
 .sub { color:var(--muted); font-size:.85rem; }
 .tariff { margin:.25rem 0 0; color:var(--muted); font-size:.9rem; }
-.notice { color:var(--muted); font-size:.9rem; margin:0 0 1rem; }
+.notice { color:var(--muted); font-size:.9rem; margin:0 0 1rem; max-width:65ch; }
 .feed { margin:0 0 .75rem; color:var(--muted); font-size:.9rem; }
 .feed.warn { color:#8a3b00; font-weight:600; }
 .window { margin:-.5rem 0 .25rem; color:var(--muted); font-size:.9rem; font-variant-numeric:tabular-nums; }
@@ -94,14 +94,19 @@ dd { margin:0; }
 .cell { display:block; flex:none; width:14px; height:14px; border-radius:3px; border:1.5px solid var(--ink); background:var(--card); }
 .cell.busy { background:var(--ink); }
 .cell.out { border-color:var(--muted); background:repeating-linear-gradient(135deg, var(--muted) 0 1.5px, var(--card) 1.5px 4px); }
-.cells.muted .cell, .cell.muted { opacity:.5; border-color:var(--muted); }
+/* Last known: --muted at full strength (>= 3:1 on --card, VIEW-7), not faded. */
+.cells.muted .cell, .cell.muted { border-color:var(--muted); }
 .cells.muted .cell.busy, .cell.busy.muted { background:var(--muted); }
+.hours { margin:.5rem 0 0; font-size:.9rem; font-variant-numeric:tabular-nums; }
+.more { margin:.5rem 0 0; font-size:.95rem; }
+.more a { display:inline-block; padding:.5rem 0; font-weight:600; }
 .count { margin:0; font-size:.9rem; font-variant-numeric:tabular-nums; }
 .profile { margin-top:1rem; }
 .profile .caption { margin:0 0 .25rem; }
+.profile .legend { margin:0 0 .5rem; }
 .strip { display:flex; align-items:flex-end; gap:2px; height:3.5rem; list-style:none; margin:0; padding:0; border-bottom:1px solid var(--line); }
 .hour { flex:1 1 0; min-width:0; min-height:2px; border-radius:2px 2px 0 0; }
-.hour.peak { background:var(--peak); }
+.hour.peak { background:var(--peak); box-shadow:inset 0 0 0 1px var(--peak-ink); }
 .hour.offpeak { background:var(--off); }
 .hour.nodata { height:.5rem; border:1px dotted var(--muted); border-bottom:0; }
 .ticks { display:grid; grid-template-columns:repeat(24, minmax(0, 1fr)); column-gap:2px; margin-top:.25rem; font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
@@ -110,8 +115,6 @@ dd { margin:0; }
 .note { margin:.25rem 0 0; font-size:.85rem; font-weight:600; color:var(--muted); }
 /* Visually hidden, still read by screen readers. On a wrapper, since a table ignores width and overflow. */
 .vh { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.key { margin:1.5rem 0 1rem; padding-top:1rem; border-top:1px solid var(--line); }
-.key .legend { margin:0 0 .75rem; }
 .swatch.nodata { border:1px dotted var(--muted); }
 .scope { margin:-.5rem 0 1rem; }
 .tally { margin:0 0 .5rem; color:var(--muted); font-size:.9rem; font-variant-numeric:tabular-nums; }

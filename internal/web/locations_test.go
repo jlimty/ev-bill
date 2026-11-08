@@ -86,7 +86,7 @@ func card(t *testing.T, body, name string) string {
 	if start < 0 {
 		t.Fatalf("no card for %q in %s", name, body)
 	}
-	open := strings.LastIndex(body[:start], `<article class="site">`)
+	open := strings.LastIndex(body[:start], `<article class="site"`)
 	end := strings.Index(body[start:], `</article>`)
 	if open < 0 || end < 0 {
 		t.Fatalf("card for %q is not inside an <article>: %s", name, body)
@@ -159,7 +159,7 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 	// The earliest sample is Bravo's, 400 x 5 min = 33 h 20 min before 00:20
 	// on 7 Nov: 15:00 on 5 Nov. The largest site has 33 h observed.
 	wantContains(t, body,
-		`<p class="window">Since 5 Nov · 33 h observed</p>`,
+		`<p class="window">Since 5 Nov · 33 h observed · sites still collecting data follow in name order</p>`,
 		// Pooled over the sufficient sites with capacity: (300 + 400) busy of
 		// (1200 + 4000) = 13.46% -> 13%, not the 17.5% average of 25% and 10%.
 		`<p class="headline">Across 2 sites, chargers were busy 13% of the observed time · least used: Bravo Hub, 10%</p>`,
@@ -177,22 +177,22 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 
 	a := card(t, body, "Alpha Mall")
 	wantContains(t, a, `<p class="sub">Otherco, Testco · 2 connectors</p>`,
-		`<span class="pct">25%</span><span class="vh">&nbsp;</span><span class="label">observed</span>`,
-		`<p class="facts">3 billing sessions · est. 4.0 kWh · est. $2.44 at today&#39;s posted price · price n/a for 1 session</p>`)
+		`<span class="pct">25%</span><span class="vh">&nbsp;·&nbsp;</span><span class="label">25 h avg · observed</span>`,
+		`<p class="facts">3 billing sessions · est. 4.0 kWh · price n/a for 1 session · $2.44 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
 	if strings.Contains(a, "collecting data") {
 		t.Errorf("LOC-4: sufficient site has a collecting note: %s", a)
 	}
 
 	b := card(t, body, "Bravo Hub")
 	wantContains(t, b, `<p class="sub">Testco · 1 connector</p>`, `<span class="pct">10%</span>`,
-		`<p class="facts">0 billing sessions · est. 0.0 kWh · est. $0.00 at today&#39;s posted price</p>`)
+		`<p class="facts">0 billing sessions · est. 0.0 kWh · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
 	if strings.Contains(b, "price n/a") {
 		t.Errorf("LOC-6: no price n/a note expected with no sessions: %s", b)
 	}
 
 	c := card(t, body, "Charlie Park")
 	wantContains(t, c, `<span class="pct">50%</span>`, `<p class="note">collecting data · 5 h</p>`,
-		`<p class="facts">2 billing sessions · est. 1.0 kWh · est. $0.00 at today&#39;s posted price · price n/a for 2 sessions</p>`)
+		`<p class="facts">2 billing sessions · est. 1.0 kWh · price n/a for 2 sessions · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
 
 	d := card(t, body, "Delta Point")
 	wantContains(t, d, `<span class="pct">n/a</span>`)
@@ -214,21 +214,21 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 		e.observe([]store.ChargerRow{locCharger("C-001", "100003", "Charlie Park", "Testco", datamall.Available)},
 			samplesBack("100003", 12, 1, 1, 0))
 		wantContains(t, e.get("/").Body.String(),
-			`<p class="window">Last 14 days</p>`,
+			`<p class="window">Last 14 days · sites still collecting data follow in name order</p>`,
 			`<p class="headline">At Alpha Mall, chargers were busy 25% of the observed time</p>`)
 	})
 	t.Run("a sample within the slack of the window start", func(t *testing.T) {
 		e := newEnv(t)
 		smp := store.OccupancySample{PostalCode: "100001", ObservedAt: fixedNow().Add(-locations.Window + fullWindowSlack), Occupied: 1, Available: 1}
 		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, []store.OccupancySample{smp})
-		wantContains(t, e.get("/").Body.String(), `<p class="window">Last 14 days</p>`)
+		wantContains(t, e.get("/").Body.String(), `<p class="window">Last 14 days · sites still collecting data follow in name order</p>`)
 	})
 	t.Run("just past the slack", func(t *testing.T) {
 		e := newEnv(t)
 		smp := store.OccupancySample{PostalCode: "100001", ObservedAt: fixedNow().Add(-locations.Window + fullWindowSlack + time.Minute), Occupied: 1, Available: 1}
 		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, []store.OccupancySample{smp})
 		// 14 days before 00:20 on 7 Nov is 00:20 on 24 Oct; plus 61 min is 01:21.
-		wantContains(t, e.get("/").Body.String(), `<p class="window">Since 24 Oct · 0 h observed</p>`)
+		wantContains(t, e.get("/").Body.String(), `<p class="window">Since 24 Oct · 0 h observed · sites still collecting data follow in name order</p>`)
 	})
 	t.Run("collecting", func(t *testing.T) {
 		e := newEnv(t)
@@ -238,7 +238,7 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 			samplesBack("100003", 60, 1, 1, 0)) // 5 h
 		body := e.get("/").Body.String()
 		wantContains(t, body, `<p class="headline">Collecting data · 5 h observed so far</p>`,
-			`<p class="window">Since 6 Nov · 5 h observed</p>`, `<p class="note">collecting data · 2 h</p>`)
+			`<p class="window">Since 6 Nov · 5 h observed · sites still collecting data follow in name order</p>`, `<p class="note">collecting data · 2 h</p>`)
 	})
 	t.Run("no samples yet", func(t *testing.T) {
 		e := newEnv(t)
@@ -249,7 +249,7 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 		body := e.get("/").Body.String()
 		wantContains(t, body, `<p class="headline">Collecting data · 0 h observed so far</p>`,
 			`<span class="pct">n/a</span>`, `<p class="note">collecting data · 0 h</p>`,
-			`<p class="facts">0 billing sessions · est. 0.0 kWh · est. $0.00 at today&#39;s posted price</p>`)
+			`<p class="facts">0 billing sessions · est. 0.0 kWh · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
 		if strings.Contains(body, `class="window"`) {
 			t.Errorf("LOC-4: a window line with no sample to date it: %s", body)
 		}
@@ -274,11 +274,11 @@ func TestLocations_LOC5_CellsAndCount(t *testing.T) {
 
 	body := e.get("/").Body.String()
 	bigCard := card(t, body, "Big Mall")
-	wantContains(t, bigCard, `<ul class="cells" aria-hidden="true">`, `<p class="count">9 busy · 17 free · 2 out</p>`,
-		`<li class="cell busy" title="R123-001 · 50 kW DC · CCS2 · busy"></li>`,
-		`<li class="cell busy" title="R123-002 · 22 kW AC · Type 2 · busy"></li>`,
-		`<li class="cell free" title="R123-010 · 22 kW AC · Type 2 · free"></li>`,
-		`<li class="cell out" title="R123-028 · 22 kW AC · Type 2 · out of service"></li>`,
+	wantContains(t, bigCard, `<ul class="cells" aria-hidden="true">`, `<p class="count" data-watch>Now: 9 busy · 17 free · 2 out</p>`,
+		`<li class="cell busy" data-key="R123-001" data-watch title="R123-001 · 50 kW DC · CCS2 · busy"></li>`,
+		`<li class="cell busy" data-key="R123-002" data-watch title="R123-002 · 22 kW AC · Type 2 · busy"></li>`,
+		`<li class="cell free" data-key="R123-010" data-watch title="R123-010 · 22 kW AC · Type 2 · free"></li>`,
+		`<li class="cell out" data-key="R123-028" data-watch title="R123-028 · 22 kW AC · Type 2 · out of service"></li>`,
 		`<p class="sub">Testco · 28 connectors</p>`)
 	for class, want := range map[string]int{"busy": 9, "free": 17, "out": 2} {
 		if n := strings.Count(bigCard, `<li class="cell `+class+`"`); n != want {
@@ -291,7 +291,7 @@ func TestLocations_LOC5_CellsAndCount(t *testing.T) {
 	}
 
 	smallCard := card(t, body, "Small Park")
-	wantContains(t, smallCard, `<p class="count">3 busy · 1 free</p>`)
+	wantContains(t, smallCard, `<p class="count" data-watch>Now: 3 busy · 1 free</p>`)
 	if strings.Contains(smallCard, "out</p>") || strings.Contains(body, "cells muted") {
 		t.Errorf("LOC-5: live feed with no out-of-service connector: %s", smallCard)
 	}
@@ -327,10 +327,10 @@ func TestLocations_LOC5_StaleIsMuted(t *testing.T) {
 			body := e.get("/").Body.String()
 			wantContains(t, body, tc.line)
 			if tc.muted {
-				wantContains(t, body, `<ul class="cells muted" aria-hidden="true">`, `<p class="count">as of 00:18 · 3 busy · 1 free</p>`)
+				wantContains(t, body, `<ul class="cells muted" aria-hidden="true">`, `<p class="count" data-watch>As of 00:18: 3 busy · 1 free</p>`)
 				return
 			}
-			wantContains(t, body, `<ul class="cells" aria-hidden="true">`, `<p class="count">3 busy · 1 free</p>`)
+			wantContains(t, body, `<ul class="cells" aria-hidden="true">`, `<p class="count" data-watch>Now: 3 busy · 1 free</p>`)
 			if strings.Contains(body, "as of") {
 				t.Errorf("LOC-5: a live count has an age: %s", body)
 			}
@@ -348,9 +348,9 @@ func TestLocations_LOC5_AsOfDate(t *testing.T) {
 		observed time.Time
 		count    string
 	}{
-		{"today", sgt(0, 0, 7), `<p class="count">as of 00:00 · 1 busy · 0 free</p>`},
-		{"yesterday", sgt(23, 59, 6), `<p class="count">as of 06 Nov 23:59 · 1 busy · 0 free</p>`},
-		{"days ago", sgt(13, 20, 3), `<p class="count">as of 03 Nov 13:20 · 1 busy · 0 free</p>`},
+		{"today", sgt(0, 0, 7), `<p class="count" data-watch>As of 00:00: 1 busy · 0 free</p>`},
+		{"yesterday", sgt(23, 59, 6), `<p class="count" data-watch>As of 06 Nov 23:59: 1 busy · 0 free</p>`},
+		{"days ago", sgt(13, 20, 3), `<p class="count" data-watch>As of 03 Nov 13:20: 1 busy · 0 free</p>`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
@@ -380,22 +380,22 @@ func TestLocations_LOC5_EmptyOperator(t *testing.T) {
 	wantContains(t, card(t, body, "Mixed"), `<p class="sub">Testco · 2 connectors</p>`)
 }
 
-// LOC-2, LOC-7: the utilization figure and its "observed" label read as two
-// words to assistive technology, "25% observed", not "25%observed": the two
-// spans are blocks, so a separator must survive layout.
+// LOC-2, LOC-7, VIEW-5: the utilization figure and its labels read as
+// separate words to assistive technology, "25% · 25 h avg · observed", not
+// "25%observed": the two spans are blocks, so a separator must survive layout.
 func TestLocations_LOC2_UtilReadsAsWords(t *testing.T) {
 	e := newEnv(t)
 	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)},
 		samplesBack("100001", 300, 1, 3, 0))
 	c := card(t, e.get("/").Body.String(), "Alpha Mall")
-	start := strings.Index(c, `<p class="util">`)
+	start := strings.Index(c, `<p class="util"`)
 	end := strings.Index(c[max(start, 0):], `</p>`)
 	if start < 0 || end < 0 {
 		t.Fatalf("no utilization paragraph in %s", c)
 	}
 	text := html.UnescapeString(tagRE.ReplaceAllString(c[start:start+end], ""))
-	if got := strings.Join(strings.Fields(text), " "); got != "25% observed" {
-		t.Errorf("LOC-2: utilization text = %q, want %q", got, "25% observed")
+	if got := strings.Join(strings.Fields(text), " "); got != "25% · 25 h avg · observed" {
+		t.Errorf("LOC-2: utilization text = %q, want %q", got, "25% · 25 h avg · observed")
 	}
 }
 
@@ -469,8 +469,9 @@ func TestLocations_LOC7_Empty(t *testing.T) {
 	wantContains(t, e.get("/").Body.String(), `<p class="empty warn">Live feed unavailable · no successful update yet. <a href="/sessions">See sessions →</a></p>`)
 }
 
-// LOC-7: the legend explains every cell state and tariff colour in text, not
+// LOC-7, VIEW-5: the cell legend explains every cell state in text, not
 // colour alone, and the estimate notice labels energy and value as estimates.
+// The notice keeps its estimate sentence in step with the facts line.
 func TestLocations_LOC7_LegendAndNotice(t *testing.T) {
 	e := newEnv(t)
 	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, nil)
@@ -480,12 +481,192 @@ func TestLocations_LOC7_LegendAndNotice(t *testing.T) {
 		`<li><span class="cell free"></span>free</li>`,
 		`<li><span class="cell out"></span>out of service</li>`,
 		`<li><span class="cell busy muted"></span>last known, feed not live</li>`,
-		`<li><span class="swatch peak"></span>Peak 07:00–23:00 · 62¢/kWh</li>`,
-		`<li><span class="swatch offpeak"></span>Off-peak 23:00–07:00 · 48¢/kWh</li>`,
-		`<li><span class="swatch nodata"></span>no data</li>`,
-		template.HTMLEscapeString(locationsNotice),
+		template.HTMLEscapeString(locationsNotice(e.p.Tariff)),
 	)
-	wantContains(t, locationsNotice, "estimate", "50 kW", "posted price")
+	wantContains(t, locationsNotice(e.p.Tariff), "estimate", "50 kW", "posted price", "operator's price, not the 62/48 billing tariff")
+	wantContains(t, body, `<p class="notice">`)
+}
+
+// VIEW-5: the labels name their time bases. The percentage reads "{N}% · {H}
+// h avg · observed"; the count is "Now: ..." and, muted, "As of 13:20: ..."; the
+// facts line says whose price the value uses; the card links to the site's
+// sessions; and a second name at the postal code is "also {name}".
+func TestLocations_VIEW5_Labels(t *testing.T) {
+	e := newEnv(t)
+	e.p.Feed = feedState(live.FeedState{Enabled: true, LastGood: fixedNow().Add(-2 * time.Minute)})
+	rows := chargersWith(2, "N", "100001", "Alpha Mall", datamall.Occupied, 1)
+	rows = append(rows, chargersWith(1, "N", "100001", "Alpha Mall Level 2", datamall.Available, 3)...)
+	e.observe(rows, samplesBack("100001", 372, 23, 77, 0)) // 31 h, 23%
+	e.mirrorStopped("N-001", sgt(22, 0, 6), sgt(22, 30, 6), 1000)
+
+	body := e.get("/").Body.String()
+	c := card(t, body, "Alpha Mall")
+	text := html.UnescapeString(tagRE.ReplaceAllString(c[strings.Index(c, `<p class="util"`):strings.Index(c, `<ul class="cells`)], ""))
+	if got := strings.Join(strings.Fields(text), " "); got != "23% · 31 h avg · observed" {
+		t.Errorf("VIEW-5: percentage = %q, want %q", got, "23% · 31 h avg · observed")
+	}
+	wantContains(t, c,
+		`<p class="count" data-watch>Now: 2 busy · 1 free</p>`,
+		`$0.70 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`,
+		`<a class="all" href="/sessions?site=100001">All sessions at this site →</a>`,
+		`also Alpha Mall Level 2`)
+
+	e.p.Feed = nil
+	wantContains(t, card(t, e.get("/").Body.String(), "Alpha Mall"), `<p class="count" data-watch>As of 00:18: 2 busy · 1 free</p>`)
+}
+
+// VIEW-5: busiest and quietest hours compare in basis points, leave out hours
+// without a usable ratio, give ties to the earliest hour, wrap the end hour
+// modulo 24, collapse to one phrase when every hour is equal, and are empty
+// with no data.
+func TestHoursLine_VIEW5(t *testing.T) {
+	h := func(occupied, available int64) store.HourAggregate {
+		return store.HourAggregate{Samples: occupied + available, Occupied: occupied, Available: available}
+	}
+	var busy18 [24]store.HourAggregate
+	busy18[18], busy18[3], busy18[9] = h(43, 57), h(0, 100), h(10, 90)
+	var tied [24]store.HourAggregate
+	tied[20], tied[5], tied[11], tied[14] = h(50, 50), h(50, 50), h(10, 90), h(10, 90)
+	var late [24]store.HourAggregate
+	late[23], late[1] = h(60, 40), h(20, 80)
+	var flat [24]store.HourAggregate
+	flat[2], flat[14] = h(25, 75), h(50, 150)
+	var unusable [24]store.HourAggregate
+	unusable[4] = store.HourAggregate{Samples: 7} // sampled, every connector out of service
+	unusable[6], unusable[8] = h(30, 70), h(10, 90)
+	var one [24]store.HourAggregate
+	one[12] = h(1, 3)
+	for _, tc := range []struct {
+		name  string
+		hours [24]store.HourAggregate
+		want  string
+	}{
+		{"busiest and quietest", busy18, "Busiest 18:00–19:00 (43%) · quietest 03:00–04:00 (0%)"},
+		{"ties go to the earliest hour", tied, "Busiest 05:00–06:00 (50%) · quietest 11:00–12:00 (10%)"},
+		{"hour 23 wraps", late, "Busiest 23:00–00:00 (60%) · quietest 01:00–02:00 (20%)"},
+		{"every observed hour equal", flat, "Every observed hour 25%"},
+		{"one observed hour", one, "Every observed hour 25%"},
+		{"an hour without a ratio is left out", unusable, "Busiest 06:00–07:00 (30%) · quietest 08:00–09:00 (10%)"},
+		{"no data", [24]store.HourAggregate{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hoursLine(tc.hours); got != tc.want {
+				t.Errorf("VIEW-5: hoursLine = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// VIEW-5: the hours line is for a site that is sufficient (LOC-4); a site
+// still collecting has none.
+func TestLocations_VIEW5_HoursLineOnlyWhenSufficient(t *testing.T) {
+	e := newEnv(t)
+	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, samplesBack("100001", 300, 1, 3, 0))
+	e.observe([]store.ChargerRow{locCharger("C-001", "100003", "Charlie Park", "Testco", datamall.Available)}, samplesBack("100003", 24, 1, 1, 0))
+	body := e.get("/").Body.String()
+	wantContains(t, card(t, body, "Alpha Mall"), `<p class="hours">Every observed hour 25%</p>`)
+	if c := card(t, body, "Charlie Park"); strings.Contains(c, `class="hours"`) {
+		t.Errorf("VIEW-5: a collecting site has an hours line: %s", c)
+	}
+}
+
+// VIEW-5: the window line states the window once, so a site's own collecting
+// note appears only when its hours differ from the window line's by 1 h or
+// more, or the window line shows no hours. Any collecting site adds the
+// ordering clause to the window line.
+func TestLocations_VIEW5_CollectingNote(t *testing.T) {
+	const clause = " · sites still collecting data follow in name order"
+	t.Run("same hours as the window line", func(t *testing.T) {
+		e := newEnv(t)
+		e.observe([]store.ChargerRow{locCharger("C-001", "100003", "Charlie Park", "Testco", datamall.Available)}, samplesBack("100003", 60, 1, 1, 0))
+		body := e.get("/").Body.String()
+		wantContains(t, body, `<p class="window">Since 6 Nov · 5 h observed`+clause+`</p>`)
+		if strings.Contains(body, "collecting data · 5 h") {
+			t.Errorf("VIEW-5: note repeats the window line's hours: %s", body)
+		}
+	})
+	t.Run("differs by an hour", func(t *testing.T) {
+		e := newEnv(t)
+		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, samplesBack("100001", 60, 1, 1, 0))   // 5 h
+		e.observe([]store.ChargerRow{locCharger("C-001", "100003", "Charlie Park", "Testco", datamall.Available)}, samplesBack("100003", 48, 1, 1, 0)) // 4 h
+		body := e.get("/").Body.String()
+		wantContains(t, card(t, body, "Charlie Park"), `<p class="note">collecting data · 4 h</p>`)
+		if strings.Contains(card(t, body, "Alpha Mall"), `class="note"`) {
+			t.Errorf("VIEW-5: the site that sets the window line has a note")
+		}
+	})
+	t.Run("last 14 days shows no hours", func(t *testing.T) {
+		e := newEnv(t)
+		old := append(samplesBack("100001", 300, 1, 3, 0), store.OccupancySample{PostalCode: "100001", ObservedAt: fixedNow().Add(-locations.Window), Occupied: 1, Available: 3})
+		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, old)
+		e.observe([]store.ChargerRow{locCharger("C-001", "100003", "Charlie Park", "Testco", datamall.Available)}, samplesBack("100003", 60, 1, 1, 0))
+		body := e.get("/").Body.String()
+		wantContains(t, body, `<p class="window">Last 14 days`+clause+`</p>`, `<p class="note">collecting data · 5 h</p>`)
+	})
+	t.Run("no collecting site, no clause", func(t *testing.T) {
+		e := newEnv(t)
+		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, samplesBack("100001", 300, 1, 3, 0))
+		if body := e.get("/").Body.String(); strings.Contains(body, "follow in name order") {
+			t.Errorf("VIEW-5: clause with no collecting site: %s", body)
+		}
+	})
+}
+
+// VIEW-5: the cell legend (4 items) sits before the first card; each strip
+// caption carries the three tariff swatches; the old 7-item legend at the
+// bottom is gone, and the notice stays last.
+func TestLocations_VIEW5_Legends(t *testing.T) {
+	e := newEnv(t)
+	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, samplesBack("100001", 300, 1, 3, 0))
+	e.observe([]store.ChargerRow{locCharger("B-001", "100002", "Bravo Hub", "Testco", datamall.Available)}, samplesBack("100002", 300, 1, 3, 0))
+	body := e.get("/").Body.String()
+	first := strings.Index(body, "<article")
+	legend := strings.Index(body, `<li><span class="cell busy"></span>busy</li>`)
+	if first < 0 || legend < 0 || legend > first {
+		t.Fatalf("VIEW-5: cell legend at %d, first card at %d; want the legend first", legend, first)
+	}
+	if n := strings.Count(body[:first], `<li><span class="cell `); n != 4 {
+		t.Errorf("VIEW-5: %d cell legend items, want 4", n)
+	}
+	for _, name := range []string{"Alpha Mall", "Bravo Hub"} {
+		c := card(t, body, name)
+		wantContains(t, c,
+			`<li><span class="swatch peak"></span>Peak 07:00–23:00 · 62¢/kWh</li>`,
+			`<li><span class="swatch offpeak"></span>Off-peak 23:00–07:00 · 48¢/kWh</li>`,
+			`<li><span class="swatch nodata"></span>no data</li>`)
+		if n := strings.Count(c, `<span class="swatch `); n != 3 {
+			t.Errorf("VIEW-5: %s has %d swatches, want 3", name, n)
+		}
+	}
+	if strings.Contains(body, `class="key"`) || strings.Contains(body, `aria-label="Legend"`) {
+		t.Error("VIEW-5: the bottom legend is still there")
+	}
+	if n := strings.Count(body, `<span class="cell `); n != 4 {
+		t.Errorf("VIEW-5: %d cell swatches on the page, want 4 (the cards' cells are <li>s)", n)
+	}
+	if strings.LastIndex(body, "<article") > strings.Index(body, `<p class="notice">`) {
+		t.Error("VIEW-5: the notice is not after the cards")
+	}
+}
+
+// VIEW-6: each card carries its postal code as data-key and each cell its
+// charger ID; cell state, utilization and the count are marked data-watch.
+// Relative times and the feed line are not.
+func TestLocations_VIEW6_Keys(t *testing.T) {
+	e := newEnv(t)
+	rows := chargersWith(2, "K", "100001", "Alpha Mall", datamall.Occupied, 1)
+	e.observe(rows, samplesBack("100001", 300, 1, 3, 0))
+	body := e.get("/").Body.String()
+	c := card(t, body, "Alpha Mall")
+	wantContains(t, body, `<article class="site" data-key="100001">`)
+	wantContains(t, c,
+		`<li class="cell busy" data-key="K-001" data-watch title=`,
+		`<li class="cell busy" data-key="K-002" data-watch title=`,
+		`<p class="util" data-watch>`,
+		`<p class="count" data-watch>`)
+	if strings.Contains(body, `class="feed" data-watch`) || strings.Contains(body, `class="feed warn" data-watch`) {
+		t.Error("VIEW-6: the feed line is watched")
+	}
 }
 
 // LOC-7: a store failure is the generic 500 page, with the cause logged.

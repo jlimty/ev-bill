@@ -2,17 +2,28 @@
 {{else}}{{with .Window}}<p class="window">{{.}}</p>
 {{end}}<p class="feed{{if .Feed.Warn}} warn{{end}}">{{.Feed.Text}}</p>
 <p class="headline">{{.Headline}}</p>
-{{range .Sites}}<article class="site">
+<ul class="legend" aria-label="Connector states">
+<li><span class="cell busy"></span>busy</li>
+<li><span class="cell free"></span>free</li>
+<li><span class="cell out"></span>out of service</li>
+<li><span class="cell busy muted"></span>last known, feed not live</li>
+</ul>
+{{range .Sites}}<article class="site" data-key="{{.Postal}}">
 <div class="head">
 <div><h2>{{.Name}}</h2><p class="sub">{{.Sub}}</p></div>
-<p class="util"><span class="pct">{{.Util}}</span>{{if .Observed}}<span class="vh">&nbsp;</span><span class="label">observed</span>{{end}}</p>
+<p class="util" data-watch><span class="pct">{{.Util}}</span>{{if .Observed}}<span class="vh">&nbsp;·&nbsp;</span><span class="label">{{.UtilLabel}}</span>{{end}}</p>
 </div>
 <ul class="cells{{if .Muted}} muted{{end}}" aria-hidden="true">
-{{range .Cells}}<li class="cell {{.Class}}" title="{{.Title}}"></li>
+{{range .Cells}}<li class="cell {{.Class}}" data-key="{{.Key}}" data-watch title="{{.Title}}"></li>
 {{end}}</ul>
-<p class="count">{{.Count}}</p>
+<p class="count" data-watch>{{.Count}}</p>
 <div class="profile">
 <p class="sub caption" aria-hidden="true">Busy by hour of day · observed</p>
+<ul class="legend" aria-hidden="true">
+<li><span class="swatch peak"></span>{{$.Legend.Peak}}</li>
+<li><span class="swatch offpeak"></span>{{$.Legend.OffPeak}}</li>
+<li><span class="swatch nodata"></span>no data</li>
+</ul>
 <ol class="strip" aria-hidden="true">
 {{range .Hours}}<li class="hour {{.Class}}"{{with .Height}} style="height:{{.}}%"{{end}} title="{{.Title}}"></li>
 {{end}}</ol>
@@ -24,8 +35,10 @@
 {{range .Hours}}<tr><th scope="row">{{.Span}}</th><td>{{.Value}}</td><td>{{.Window}}</td></tr>
 {{end}}</tbody>
 </table></div>
-</div>
+{{with .HoursLine}}<p class="hours">{{.}}</p>
+{{end}}</div>
 <p class="facts">{{.Facts}}</p>
 {{with .Collecting}}<p class="note">{{.}}</p>
-{{end}}</article>
+{{end}}<p class="more"><a class="all" href="{{.Link}}">All sessions at this site →</a></p>
+</article>
 {{end}}{{end}}{{end}}

@@ -317,8 +317,7 @@ func TestStore_LOC6_SessionsInSiteWindow(t *testing.T) {
 }
 
 // LOC-5: chargers sort by charger_id in byte order, as Go compares strings,
-// whatever the database's collation, so the site's name (its lowest
-// charger_id's) and the cell order agree with Go. In byte order "-" (0x2D)
+// whatever the database's collation, so the cell order agrees with Go. In byte order "-" (0x2D)
 // comes before "1" (0x31); en_US.UTF-8 under glibc ignores the hyphen and
 // would put AB1 first.
 func TestStore_LOC5_ChargerIDByteOrder(t *testing.T) {
@@ -338,13 +337,12 @@ func TestStore_LOC5_ChargerIDByteOrder(t *testing.T) {
 		t.Errorf("charger order = %v, want %v (byte order)", ids, want)
 	}
 	if a.Name != "Dash Name" {
-		t.Errorf("Name = %q, want Dash Name (AB-2 is the lowest charger_id in byte order)", a.Name)
+		t.Errorf("Name = %q, want Dash Name (a one-one tie goes to the name that sorts first)", a.Name)
 	}
 }
 
 // LOC-5: each site lists the chargers of the newest observation sorted by
-// charger_id, its operators distinct and sorted, and the name of its lowest
-// charger_id. Sites sort by postal code. A charger row from an older
+// charger_id and its operators distinct and sorted. Sites sort by postal code. A charger row from an older
 // observation at the same postal code is not in scope.
 func TestStore_LOC5_ChargersAndOperators(t *testing.T) {
 	t.Parallel()
@@ -367,7 +365,7 @@ func TestStore_LOC5_ChargersAndOperators(t *testing.T) {
 	}
 	p := got[1]
 	if p.Name != "Plaza" {
-		t.Errorf("Name = %q, want Plaza (the lowest charger_id's location_name)", p.Name)
+		t.Errorf("Name = %q, want Plaza (three names tie, so the one that sorts first)", p.Name)
 	}
 	if !slices.Equal(p.Operators, []string{"Alpha", "Zeta"}) {
 		t.Errorf("Operators = %v, want [Alpha Zeta]", p.Operators)
@@ -381,6 +379,34 @@ func TestStore_LOC5_ChargersAndOperators(t *testing.T) {
 		if p.Chargers[i] != want[i] {
 			t.Errorf("Chargers[%d] = %+v, want %+v", i, p.Chargers[i], want[i])
 		}
+	}
+}
+
+// VIEW-5: a site's name is the location name held by the most connectors in
+// the newest observation, ties going to the name that sorts first, and the
+// other names are its Also. It does not follow the lowest charger_id: the name
+// stays when that connector drops out of the next observation.
+func TestStore_VIEW5_MajorityName(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	applyObservation(t, s, []store.ChargerRow{
+		siteCharger("SG-1", "100001", "A", "Testco", "0.50", "kWh", locObs),
+		siteCharger("SG-2", "100001", "B", "Testco", "0.50", "kWh", locObs),
+		siteCharger("SG-3", "100001", "B", "Testco", "0.50", "kWh", locObs),
+	}, nil)
+	a := onlySite(t, listLocations(t, s), "100001")
+	if a.Name != "B" || !slices.Equal(a.Also, []string{"A"}) {
+		t.Errorf("Name, Also = %q, %v; want B, [A]", a.Name, a.Also)
+	}
+
+	// SG-1, the lowest charger_id, leaves the feed.
+	applyObservation(t, s, []store.ChargerRow{
+		siteCharger("SG-2", "100001", "B", "Testco", "0.50", "kWh", locObs.Add(time.Minute)),
+		siteCharger("SG-3", "100001", "B", "Testco", "0.50", "kWh", locObs.Add(time.Minute)),
+	}, nil)
+	a = onlySite(t, listLocations(t, s), "100001")
+	if a.Name != "B" || a.Also == nil || len(a.Also) != 0 {
+		t.Errorf("after SG-1 left: Name, Also = %q, %v; want B, empty", a.Name, a.Also)
 	}
 }
 

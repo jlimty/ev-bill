@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/jlimty/ev-bill/internal/billing"
 	"github.com/jlimty/ev-bill/internal/datamall"
 	"github.com/jlimty/ev-bill/internal/locations"
 	"github.com/jlimty/ev-bill/internal/mirror"
@@ -23,10 +25,14 @@ const fullWindowSlack = time.Hour
 const emptyLocations = "Live mirror off · no location data yet"
 
 // locationsNotice labels the page's figures as observed or estimated (LOC-6,
-// PRODUCT.md). The DC cap comes from the mirror's own constant.
-var locationsNotice = "Utilization is observed from LTA occupancy, over the time the feed was watched; " +
-	`"busy" includes reserved connectors. Energy is an estimate at rated power (DC capped at ` +
-	FormatKW(mirror.DCMaxW) + "), and value is that estimate at each charger's posted price today, applied to the whole window."
+// PRODUCT.md). The DC cap comes from the mirror's own constant, and the
+// estimate sentence agrees with each card's facts line (VIEW-1).
+func locationsNotice(t billing.Tariff) string {
+	return "Utilization is observed from LTA occupancy, over the time the feed was watched; " +
+		`"busy" includes reserved connectors. Energy is an estimate at rated power (DC capped at ` +
+		FormatKW(mirror.DCMaxW) + "), and value is that estimate at each charger's posted price today, applied to the whole window " +
+		"(the operator's price, not the " + tariffName(t) + " billing tariff)."
+}
 
 // locationsPage is the Locations page and its live section (LOC-4, LOC-5,
 // LOC-7). With no site in scope only Empty is set in the live section.
@@ -43,19 +49,22 @@ type locationsPage struct {
 
 // siteCard is one location's card.
 type siteCard struct {
-	Name, Sub         string
+	Name, Sub, Postal string
 	Cells             []cell
 	Muted             bool
 	Count             string
 	Util              string // "23%" or "n/a"
-	Observed          bool   // Util is a percentage, so it carries the "observed" label
+	Observed          bool   // Util is a percentage, so it carries UtilLabel
+	UtilLabel         string // "31 h avg · observed" (VIEW-5)
 	Hours             []hourBar
+	HoursLine         string // busiest and quietest hours, for a sufficient site (VIEW-5)
+	Link              string // the site's sessions (NAV-2)
 	Facts, Collecting string
 }
 
 // cell is one connector in the grid (LOC-5).
 type cell struct {
-	Class, Title string
+	Key, Class, Title string
 }
 
 // hourBar is one hour of the 24-hour strip and its row in the hidden table
@@ -108,7 +117,7 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 		layoutData: p.layout("Locations", "view=locations"),
 		Feed:       line,
 		Legend:     barLegend{Peak: peakLegend(p.Tariff), OffPeak: offPeakLegend(p.Tariff)},
-		Notice:     locationsNotice,
+		Notice:     locationsNotice(p.Tariff),
 	}
 	data.Nav = navLocations
 	if len(aggs) == 0 {
@@ -137,7 +146,15 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 		}
 	}
 
-	data.Window = p.windowLine(now, earliest, maxHours)
+	window, windowHours := p.windowLine(now, earliest, maxHours)
+	collecting := false
+	for _, a := range aggs {
+		collecting = collecting || !locations.Sufficient(a.Samples)
+	}
+	if collecting && window != "" {
+		window += " · sites still collecting data follow in name order"
+	}
+	data.Window = window
 	if text, _, ok := locations.Headline(sites); ok {
 		data.Headline = text
 	} else {
@@ -146,12 +163,12 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 	// LOC-5: not live when the mirror is off, the feed line warns, or no poll
 	// has succeeded since startup, when the stored states predate this run.
 	muted := !st.Enabled || line.Warn || st.LastGood.IsZero()
-	asOf := ""
+	lead := "Now: "
 	if muted {
-		asOf = "as of " + p.asOf(now, newest) + " · "
+		lead = "As of " + p.asOf(now, newest) + ": "
 	}
 	for _, s := range locations.Order(sites) {
-		data.Sites = append(data.Sites, p.siteCard(byPostal[s.PostalCode], muted, asOf))
+		data.Sites = append(data.Sites, p.siteCard(byPostal[s.PostalCode], muted, lead, windowHours, maxHours))
 	}
 	return data, nil
 }
@@ -166,40 +183,57 @@ func (p *Pages) asOf(now, t time.Time) string {
 // windowLine states the page's window (LOC-4): "Last 14 days" once the
 // earliest sample shown is (within fullWindowSlack of) 14 days old, else
 // "Since 8 Nov · 31 h observed" with the largest site's observed hours. It is
-// empty when no site has a sample, since there is nothing to date.
-func (p *Pages) windowLine(now, earliest time.Time, maxHours int64) string {
+// empty when no site has a sample, since there is nothing to date. hours
+// reports whether the line states observed hours (VIEW-5).
+func (p *Pages) windowLine(now, earliest time.Time, maxHours int64) (line string, hours bool) {
 	switch {
 	case earliest.IsZero():
-		return ""
+		return "", false
 	case now.Sub(earliest) >= locations.Window-fullWindowSlack:
-		return "Last 14 days"
+		return "Last 14 days", false
 	default:
-		return fmt.Sprintf("Since %s · %d h observed", earliest.In(p.Tariff.Location).Format("2 Jan"), maxHours)
+		return fmt.Sprintf("Since %s · %d h observed", earliest.In(p.Tariff.Location).Format("2 Jan"), maxHours), true
 	}
 }
 
 // siteCard builds one location's card: its connector grid and count (LOC-5),
-// utilization (LOC-2), hourly strip (LOC-3), collecting note (LOC-4) and facts
-// line (LOC-6).
-func (p *Pages) siteCard(a store.LocationAggregate, muted bool, asOf string) siteCard {
-	c := siteCard{
-		Name:  a.Name,
-		Sub:   joinNonEmpty(" · ", joinNonEmpty(", ", a.Operators...), plural(int64(len(a.Chargers)), "connector", "connectors")),
-		Muted: muted,
-		Util:  "n/a",
-		Facts: fmt.Sprintf("%s · est. %s · est. %s at today's posted price",
-			plural(a.Sessions, "billing session", "billing sessions"), FormatWh(a.EnergyWh), FormatCents(a.ValueCents)),
+// utilization (LOC-2), hourly strip (LOC-3), hours line, collecting note
+// (LOC-4), facts line (LOC-6) and link to its sessions (VIEW-5). The window
+// line's own hours (windowHours, maxHours) decide whether the collecting note
+// would only repeat it.
+func (p *Pages) siteCard(a store.LocationAggregate, muted bool, lead string, windowHours bool, maxHours int64) siteCard {
+	hours := locations.ObservedHours(a.Samples)
+	facts := []string{
+		plural(a.Sessions, "billing session", "billing sessions"),
+		"est. " + FormatWh(a.EnergyWh),
 	}
 	if a.PriceNASessions > 0 {
-		c.Facts += " · price n/a for " + plural(a.PriceNASessions, "session", "sessions")
+		facts = append(facts, "price n/a for "+plural(a.PriceNASessions, "session", "sessions"))
+	}
+	facts = append(facts, FormatCents(a.ValueCents)+" est. value at today's posted price (operator's price, not the "+tariffName(p.Tariff)+" billing tariff)")
+	sub := []string{joinNonEmpty(", ", a.Operators...), plural(int64(len(a.Chargers)), "connector", "connectors")}
+	for _, n := range a.Also {
+		sub = append(sub, "also "+n)
+	}
+	c := siteCard{
+		Name:   a.Name,
+		Postal: a.PostalCode,
+		Sub:    joinNonEmpty(" · ", sub...),
+		Muted:  muted,
+		Util:   "n/a",
+		Link:   "/sessions?site=" + a.PostalCode,
+		Facts:  strings.Join(facts, " · "),
 	}
 	if bp, ok := locations.UtilizationBP(a.Occupied, a.Available); ok {
 		c.Util, c.Observed = fmt.Sprintf("%d%%", locations.PercentFromBP(bp)), true
+		c.UtilLabel = fmt.Sprintf("%d h avg · observed", hours)
 	}
-	if !locations.Sufficient(a.Samples) {
-		c.Collecting = fmt.Sprintf("collecting data · %d h", locations.ObservedHours(a.Samples))
+	if locations.Sufficient(a.Samples) {
+		c.HoursLine = hoursLine(a.Hours)
+	} else if !windowHours || maxHours-hours >= 1 {
+		c.Collecting = fmt.Sprintf("collecting data · %d h", hours)
 	}
-	c.Cells, c.Count = cells(a.Chargers, asOf)
+	c.Cells, c.Count = cells(a.Chargers, lead)
 	for h, agg := range a.Hours {
 		c.Hours = append(c.Hours, hour(h, agg))
 	}
@@ -207,8 +241,9 @@ func (p *Pages) siteCard(a store.LocationAggregate, muted bool, asOf string) sit
 }
 
 // cells builds the connector grid and its text count (LOC-5): "9 busy · 17
-// free · 2 out", with "· N out" only when N > 0, after asOf.
-func cells(chargers []store.ChargerRow, asOf string) ([]cell, string) {
+// free · 2 out", with "· N out" only when N > 0, after lead ("Now: " or "As
+// of 13:20: ").
+func cells(chargers []store.ChargerRow, lead string) ([]cell, string) {
 	out := make([]cell, 0, len(chargers))
 	var busy, free, down int
 	for _, ch := range chargers {
@@ -223,13 +258,49 @@ func cells(chargers []store.ChargerRow, asOf string) ([]cell, string) {
 		default:
 			down++
 		}
-		out = append(out, cell{Class: class, Title: joinNonEmpty(" · ", ch.ChargerID, chargerPower(&ch), ch.PlugType, state)})
+		out = append(out, cell{Key: ch.ChargerID, Class: class, Title: joinNonEmpty(" · ", ch.ChargerID, chargerPower(&ch), ch.PlugType, state)})
 	}
-	count := fmt.Sprintf("%s%d busy · %d free", asOf, busy, free)
+	count := fmt.Sprintf("%s%d busy · %d free", lead, busy, free)
 	if down > 0 {
 		count += fmt.Sprintf(" · %d out", down)
 	}
 	return out, count
+}
+
+// hoursLine states a site's busiest and quietest hours as text (VIEW-5):
+// "Busiest 18:00–19:00 (43%) · quietest 03:00–04:00 (0%)". Hours compare in
+// basis points; an hour without a usable ratio (no samples, or no capacity) is
+// left out, and a tie goes to the earliest hour. When every hour with data has
+// the same value it reads "Every observed hour 25%". It is empty when no hour
+// has data.
+func hoursLine(hours [24]store.HourAggregate) string {
+	busiest, quietest := -1, -1
+	var hi, lo int64
+	for h, agg := range hours {
+		bp, ok := locations.UtilizationBP(agg.Occupied, agg.Available)
+		if !ok {
+			continue
+		}
+		if busiest < 0 || bp > hi {
+			busiest, hi = h, bp
+		}
+		if quietest < 0 || bp < lo {
+			quietest, lo = h, bp
+		}
+	}
+	switch {
+	case busiest < 0:
+		return ""
+	case hi == lo:
+		return fmt.Sprintf("Every observed hour %d%%", locations.PercentFromBP(hi))
+	}
+	return fmt.Sprintf("Busiest %s (%d%%) · quietest %s (%d%%)",
+		hourSpan(busiest), locations.PercentFromBP(hi), hourSpan(quietest), locations.PercentFromBP(lo))
+}
+
+// hourSpan is hour h as "18:00–19:00", wrapping modulo 24.
+func hourSpan(h int) string {
+	return fmt.Sprintf("%02d:00–%02d:00", h, (h+1)%24)
 }
 
 // hour builds hour h's bar (LOC-3). An hour with samples is coloured by its
@@ -242,7 +313,7 @@ func hour(h int, agg store.HourAggregate) hourBar {
 	if locations.IsPeakHour(h) {
 		window, class = "peak", "peak"
 	}
-	bar := hourBar{Span: fmt.Sprintf("%02d:00–%02d:00", h, (h+1)%24), Window: window, Class: "nodata", Value: "no data"}
+	bar := hourBar{Span: hourSpan(h), Window: window, Class: "nodata", Value: "no data"}
 	bp, ok := locations.UtilizationBP(agg.Occupied, agg.Available)
 	switch {
 	case ok:
