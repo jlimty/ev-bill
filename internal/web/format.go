@@ -3,6 +3,7 @@ package web
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/jlimty/ev-bill/internal/billing"
 )
@@ -39,4 +40,31 @@ func BarWidths(segs []billing.Segment) []string {
 		widths[i] = fmt.Sprintf("%d.%d", tenths/10, tenths%10)
 	}
 	return widths
+}
+
+// FormatKW formats watts as kW, rounded half-up to one decimal, with the
+// decimal left out when it is zero, using integers only (LIVE-4):
+// 7400 -> "7.4 kW", 22000 -> "22 kW". Negative input is not expected.
+func FormatKW(w int64) string {
+	tenths := (w + 50) / 100
+	if tenths%10 == 0 {
+		return fmt.Sprintf("%d kW", tenths/10)
+	}
+	return fmt.Sprintf("%d.%d kW", tenths/10, tenths%10)
+}
+
+// FormatAgo formats how long ago something happened (LIVE-4): "just now"
+// under a minute (including a negative d, from a clock slightly ahead), then
+// whole minutes under an hour, whole hours under 48 hours, and whole days.
+func FormatAgo(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", d/time.Minute)
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%d h ago", d/time.Hour)
+	default:
+		return fmt.Sprintf("%d days ago", d/(24*time.Hour))
+	}
 }

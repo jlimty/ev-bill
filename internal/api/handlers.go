@@ -92,6 +92,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	s.changed()
 	s.respond(w, r, http.StatusCreated, sess, nil, now)
 }
 
@@ -113,6 +114,8 @@ func (s *Server) addMeterValue(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if duplicate {
 		status = http.StatusOK
+	} else {
+		s.changed()
 	}
 	s.respond(w, r, status, sess, readings, now)
 }
@@ -126,10 +129,13 @@ func (s *Server) stopSession(w http.ResponseWriter, r *http.Request) {
 	}
 	stop := billing.Reading{At: utcMicro(*req.StoppedAt), MeterWh: *req.MeterStopWh}
 	now := s.Now()
-	sess, readings, err := s.Store.StopSession(r.Context(), sessions.SourceAPI, r.PathValue("id"), stop, now)
+	sess, readings, replay, err := s.Store.StopSession(r.Context(), sessions.SourceAPI, r.PathValue("id"), stop, now)
 	if err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	if !replay {
+		s.changed()
 	}
 	s.respond(w, r, http.StatusOK, sess, readings, now)
 }

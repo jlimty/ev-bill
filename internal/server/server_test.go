@@ -683,3 +683,32 @@ func TestNew_LIVE1_NoHub(t *testing.T) {
 		}
 	}
 }
+
+// LIVE-3: New wires the API's writes to the hub, so a session started through
+// the API reaches an open list stream without any other signal.
+func TestNew_LIVE3_APIWritesReachStreams(t *testing.T) {
+	d, _ := testDeps(t, io.Discard)
+	srv := httptest.NewServer(New(d))
+	t.Cleanup(srv.Close)
+	_, stream := openEvents(t, srv.URL)
+
+	body := `{"charger_id":"CP-API","started_at":"2026-11-08T12:00:00Z","meter_start_wh":0}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/sessions", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-API-Key", "k")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/sessions: %v", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /api/sessions = %d, want 201", resp.StatusCode)
+	}
+	if data := nextEventData(t, stream); !strings.Contains(data, "CP-API") {
+		t.Errorf("LIVE-3: event after the API write lacks the new session: %s", data)
+	}
+}

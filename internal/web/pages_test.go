@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/jlimty/ev-bill/internal/billing"
+	"github.com/jlimty/ev-bill/internal/datamall"
+	"github.com/jlimty/ev-bill/internal/live"
 	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
 	"github.com/jlimty/ev-bill/internal/testdb"
@@ -76,7 +79,7 @@ func (e *env) mockup(charger string) string {
 	id := e.start(charger, sgt(21, 40, 6))
 	e.reading(id, sgt(22, 20, 6), 4800)
 	e.reading(id, sgt(23, 0, 6), 9600)
-	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(0, 15, 7), MeterWh: 18000}, fixedNow()); err != nil {
+	if _, _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(0, 15, 7), MeterWh: 18000}, fixedNow()); err != nil {
 		e.t.Fatalf("stop session: %v", err)
 	}
 	return id
@@ -107,7 +110,9 @@ func badge(status string) string {
 	return `<span class="badge ` + status + `">` + status + `</span>`
 }
 
-const refreshMeta = `<meta http-equiv="refresh" content="3">`
+// refreshMeta is the no-JS fallback: a 3 s refresh only for browsers without
+// scripts, since live.js updates the page for the rest (LIVE-3).
+const refreshMeta = `<noscript><meta http-equiv="refresh" content="3"></noscript>`
 
 // UI-1: newest first, status text, energy and cost, links, 3 s refresh.
 func TestListPage_UI1(t *testing.T) {
@@ -227,7 +232,7 @@ func TestTemplates_EscapeValues(t *testing.T) {
 func TestPages_SecurityHeaders(t *testing.T) {
 	e := newEnv(t)
 	id := e.mockup("CP-01")
-	const wantCSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+	const wantCSP = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'"
 	for _, path := range []string{"/", "/sessions/" + id, "/sessions/not-a-uuid"} {
 		rec := e.get(path)
 		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
@@ -245,16 +250,22 @@ func TestPages_SecurityHeaders(t *testing.T) {
 	}
 }
 
-// The CSP forbids scripts and external resources, so the pages must not need
-// any: only inline CSS and the style attribute are used.
+// LIVE-3: the CSP allows only same-origin scripts and connections, so the
+// pages need nothing else: inline CSS, the style attribute, and the one
+// same-origin script, /static/live.js, on live pages only.
 func TestPages_NeedNoScriptOrExternalResources(t *testing.T) {
 	e := newEnv(t)
-	id := e.mockup("CP-01")
-	for _, path := range []string{"/", "/sessions/" + id} {
+	done := e.mockup("CP-01")
+	active := e.start("CP-02", sgt(0, 15, 7))
+	for path, live := range map[string]bool{"/": true, "/sessions/" + active: true, "/sessions/" + done: false, "/sessions/not-a-uuid": false} {
 		body := strings.ToLower(e.get(path).Body.String())
+		rest := strings.Replace(body, strings.ToLower(liveScript), "", 1)
+		if live != (rest != body) {
+			t.Errorf("LIVE-3: %s: has live.js = %v, want %v", path, rest != body, live)
+		}
 		for _, banned := range []string{"<script", "<link", "<img", "<iframe", "src=", "@import", "url("} {
-			if strings.Contains(body, banned) {
-				t.Errorf("%s: page contains %q, which the CSP would block", path, banned)
+			if strings.Contains(rest, banned) {
+				t.Errorf("%s: page contains %q besides live.js, which the CSP would block", path, banned)
 			}
 		}
 	}
@@ -265,7 +276,7 @@ func TestDetailPage_UI2_SameDayTimesHaveNoDate(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-02", sgt(10, 0, 6))
 	e.reading(id, sgt(10, 30, 6), 3000)
-	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(12, 0, 6), MeterWh: 9000}, fixedNow()); err != nil {
+	if _, _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(12, 0, 6), MeterWh: 9000}, fixedNow()); err != nil {
 		t.Fatalf("stop session: %v", err)
 	}
 	body := e.get("/sessions/" + id).Body.String()
@@ -291,7 +302,7 @@ func TestDetailPage_UI2_JustUnder24hStaysShort(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-04", sgt(7, 0, 6))
 	now := sgt(8, 0, 7)
-	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(6, 59, 7), MeterWh: 20000}, now); err != nil {
+	if _, _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(6, 59, 7), MeterWh: 20000}, now); err != nil {
 		t.Fatalf("stop session: %v", err)
 	}
 	body := e.get("/sessions/" + id).Body.String()
@@ -308,7 +319,7 @@ func TestDetailPage_UI2_FortyEightHourSegmentsShowDates(t *testing.T) {
 	id := e.start("CP-03", sgt(7, 0, 6))
 	now := sgt(8, 0, 8)
 	stop := billing.Reading{At: sgt(7, 0, 8), MeterWh: 48000}
-	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, stop, now); err != nil {
+	if _, _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, stop, now); err != nil {
 		t.Fatalf("stop session: %v", err)
 	}
 	body := e.get("/sessions/" + id).Body.String()
@@ -321,9 +332,290 @@ func TestDetailPage_UI2_Exactly24hShowsDates(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-05", sgt(7, 0, 6))
 	now := sgt(8, 0, 7)
-	if _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(7, 0, 7), MeterWh: 24000}, now); err != nil {
+	if _, _, _, err := e.st.StopSession(context.Background(), sessions.SourceAPI, id, billing.Reading{At: sgt(7, 0, 7), MeterWh: 24000}, now); err != nil {
 		t.Fatalf("stop session: %v", err)
 	}
 	body := e.get("/sessions/" + id).Body.String()
 	wantContains(t, body, "06 Nov 07:00 – 23:00", "06 Nov 23:00 – 07 Nov 07:00")
+}
+
+// liveScript is the one script tag the live pages carry (LIVE-3).
+const liveScript = `<script src="/static/live.js" defer></script>`
+
+const (
+	tariffText  = "Peak 07:00–23:00 · 62¢/kWh · Off-peak 23:00–07:00 · 48¢/kWh · Singapore time"
+	attribution = "Charger data: LTA DataMall EV Charging Points."
+)
+
+// noticeHTML is the estimate notice as it appears in the markup: html/template
+// writes its quotes as &#34;, which the browser shows as plain quotes.
+var noticeHTML = template.HTMLEscapeString(`Mirrored chargers: energy and cost are estimates at rated power (DC capped at 50 kW); "occupied" includes reserved connectors.`)
+
+// charger stores a chargers row as the poller would (MIR-8).
+func (e *env) charger(id, location, operator, current string, powerW int64, held bool, observed time.Time) {
+	e.t.Helper()
+	row := store.ChargerRow{
+		Connector: datamall.Connector{
+			ChargerID: id, LocationName: location, Address: "1 Test Road", PostalCode: "100001",
+			Operator: operator, Position: "B1", PlugType: "Type 2", Current: current, PowerW: powerW,
+			Price: "0.5000", Status: datamall.Occupied,
+		},
+		Held:       held,
+		ObservedAt: observed,
+	}
+	if err := e.st.UpsertChargers(context.Background(), []store.ChargerRow{row}); err != nil {
+		e.t.Fatalf("upsert charger: %v", err)
+	}
+}
+
+// mirrorSession starts a mirror session and adds one reading.
+func (e *env) mirrorSession(charger string, start, readAt time.Time, wh int64) string {
+	e.t.Helper()
+	s, err := e.st.CreateSession(context.Background(), sessions.SourceMirror, charger, start, 0, fixedNow())
+	if err != nil {
+		e.t.Fatalf("create mirror session: %v", err)
+	}
+	if _, _, _, err := e.st.AddReading(context.Background(), sessions.SourceMirror, s.ID, billing.Reading{At: readAt, MeterWh: wh}, fixedNow()); err != nil {
+		e.t.Fatalf("add mirror reading: %v", err)
+	}
+	return s.ID
+}
+
+func feedState(s live.FeedState) *live.Feed {
+	f := &live.Feed{}
+	f.Store(s)
+	return f
+}
+
+// LIVE-4: the list page shows the tariff header, the estimate notice, charger
+// context on mirror rows (location, operator, kW and AC/DC), a mirror or
+// simulated label on every row, totals across the listed sessions, and the
+// attribution.
+func TestList_LIVE4_Content(t *testing.T) {
+	e := newEnv(t)
+	e.charger("SG-AC-1", "Test Mall", "Testco", "AC", 7_400, false, sgt(0, 18, 7))
+	e.charger("SG-DC-1", "Fast Hub", "Fastco", "DC", 50_000, false, sgt(0, 18, 7))
+	e.mockup("CP-SIM")                                            // api: 18000 Wh, 998 cents
+	e.mirrorSession("SG-AC-1", sgt(0, 0, 7), sgt(0, 10, 7), 1233) // off-peak: 1233 Wh x 48 = 59.18 -> 59 cents
+	e.mirrorSession("SG-DC-1", sgt(0, 5, 7), sgt(0, 15, 7), 8333) // off-peak: 8333 Wh x 48 = 399.98 -> 400 cents
+
+	rec := e.get("/")
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	wantContains(t, body, tariffText, noticeHTML, attribution,
+		"Test Mall", "Testco · 7.4 kW AC", "Fast Hub", "Fastco · 50 kW DC",
+		`>SG-AC-1</a> <span class="source mirror">mirror</span>`,
+		`>SG-DC-1</a> <span class="source mirror">mirror</span>`,
+		`>CP-SIM</a> <span class="source simulated">simulated</span>`,
+		"20 min ago", // SG-AC-1 started at 00:00, now is 00:20
+	)
+	// The totals are the sums of the rows' int64 values, formatted once:
+	// 18000 + 1233 + 8333 = 27566 Wh and 998 + 59 + 400 = 1457 cents.
+	wantContains(t, body, `<td class="num">`+FormatWh(27566)+`</td><td class="num">`+FormatCents(1457)+`</td>`)
+	if strings.Count(body, `class="source `) != 3 {
+		t.Errorf("LIVE-4: want 3 source labels, body %s", body)
+	}
+}
+
+// LIVE-4: the feed status line in each state: mirror off (no Feed, or not
+// enabled), waiting for the first good poll, live, and delayed once the last
+// good poll is more than 15 min old. Held connectors are added at the end.
+func TestList_LIVE4_FeedLine(t *testing.T) {
+	now := fixedNow() // 00:20
+	for _, tc := range []struct {
+		name string
+		feed *live.Feed
+		want string
+	}{
+		{"no feed", nil, `<p class="feed">Live mirror off</p>`},
+		{"disabled", feedState(live.FeedState{}), `<p class="feed">Live mirror off</p>`},
+		{"waiting", feedState(live.FeedState{Enabled: true}), `<p class="feed">Waiting for the first live update</p>`},
+		{"live", feedState(live.FeedState{Enabled: true, LastGood: now.Add(-2 * time.Minute)}),
+			`<p class="feed">Live from LTA DataMall · last update 00:18 (2 min ago)</p>`},
+		{"15 min is still live", feedState(live.FeedState{Enabled: true, LastGood: now.Add(-15 * time.Minute)}),
+			`<p class="feed">Live from LTA DataMall · last update 00:05 (15 min ago)</p>`},
+		{"delayed", feedState(live.FeedState{Enabled: true, LastGood: now.Add(-25 * time.Minute)}),
+			`<p class="feed warn">Live feed delayed · last update 23:55 (25 min ago)</p>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.p.Feed = tc.feed
+			wantContains(t, e.get("/").Body.String(), tc.want)
+		})
+	}
+}
+
+// LIVE-4, MIR-12: connectors held after a 48 h stop are counted at the end of
+// the feed line, in the singular for one.
+func TestList_LIVE4_FeedLineHeld(t *testing.T) {
+	e := newEnv(t)
+	e.p.Feed = feedState(live.FeedState{Enabled: true, LastGood: fixedNow().Add(-2 * time.Minute)})
+	e.charger("SG-1", "Test Mall", "Testco", "AC", 7_400, true, sgt(0, 18, 7))
+	wantContains(t, e.get("/").Body.String(),
+		"Live from LTA DataMall · last update 00:18 (2 min ago) · 1 connector occupied over 48 h, not billed</p>")
+	e.charger("SG-2", "Test Mall", "Testco", "AC", 7_400, true, sgt(0, 18, 7))
+	wantContains(t, e.get("/").Body.String(),
+		"Live from LTA DataMall · last update 00:18 (2 min ago) · 2 connectors occupied over 48 h, not billed</p>")
+
+	e.p.Feed = feedState(live.FeedState{})
+	if body := e.get("/").Body.String(); strings.Contains(body, "occupied over 48 h") {
+		t.Errorf("LIVE-4: mirror off, yet the line counts held connectors: %s", body)
+	}
+}
+
+// LIVE-4: the tariff header is built from the tariff's own values.
+func TestTariffHeader_LIVE4(t *testing.T) {
+	if got := tariffHeader(billing.SingaporeTariff()); got != tariffText {
+		t.Errorf("tariffHeader(Singapore) = %q, want %q", got, tariffText)
+	}
+	kl, err := time.LoadLocation("Asia/Kuala_Lumpur")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := billing.Tariff{Location: kl, PeakStartHour: 8, PeakEndHour: 22, PeakRateCentsPerKWh: 70, OffPeakRateCentsPerKWh: 40}
+	want := "Peak 08:00–22:00 · 70¢/kWh · Off-peak 22:00–08:00 · 40¢/kWh · Kuala Lumpur time"
+	if got := tariffHeader(other); got != want {
+		t.Errorf("tariffHeader(other) = %q, want %q", got, want)
+	}
+	// The bar legend uses the same per-window text.
+	if got := peakLegend(other); got != "Peak 08:00–22:00 · 70¢/kWh" {
+		t.Errorf("peakLegend(other) = %q", got)
+	}
+	if got := offPeakLegend(other); got != "Off-peak 22:00–08:00 · 40¢/kWh" {
+		t.Errorf("offPeakLegend(other) = %q", got)
+	}
+}
+
+// LIVE-4, MIR-12: a failure to count held connectors is a generic 500 page.
+func TestList_LIVE4_HeldCountFailureIs500(t *testing.T) {
+	e := newEnv(t)
+	e.p.Feed = feedState(live.FeedState{Enabled: true})
+	e.pool.Close()
+	rec := e.get("/")
+	wantHTML(t, rec, http.StatusInternalServerError)
+	if !strings.Contains(e.logs.String(), "held count") {
+		t.Errorf("cause not logged: %q", e.logs.String())
+	}
+}
+
+// LIVE-3: the list page carries the exact CSP, the one same-origin script,
+// the stream it opens, the no-JS refresh fallback, and no inline script. The
+// element live.js swaps is present even when the list is empty.
+func TestList_LIVE3_CSPAndScript(t *testing.T) {
+	e := newEnv(t)
+	rec := e.get("/")
+	wantHTML(t, rec, http.StatusOK)
+	const wantCSP = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+	if got := rec.Header().Get("Content-Security-Policy"); got != wantCSP {
+		t.Errorf("LIVE-3: Content-Security-Policy = %q, want %q", got, wantCSP)
+	}
+	body := rec.Body.String()
+	wantContains(t, body, liveScript, refreshMeta, `<body data-stream="view=list">`,
+		`<div class="card" data-live="list">`, "<tbody>", "No sessions yet")
+	if n := strings.Count(body, "<script"); n != 1 {
+		t.Errorf("LIVE-3: %d script tags, want only live.js", n)
+	}
+}
+
+// LIVE-3: live.js is served same-origin as JavaScript, with the security
+// headers, and opens the event stream.
+func TestStatic_LIVE3_LiveJS(t *testing.T) {
+	e := newEnv(t)
+	rec := e.get("/static/live.js")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /static/live.js = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/javascript; charset=utf-8" {
+		t.Errorf("LIVE-3: Content-Type = %q", ct)
+	}
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Content-Security-Policy") != contentSecurityPolicy {
+		t.Errorf("LIVE-3: live.js lacks the security headers: %v", rec.Header())
+	}
+	js := rec.Body.String()
+	wantContains(t, js, "EventSource", "/events?",
+		// A closed stream reloads the page once after 30 s, through a function
+		// passed to setTimeout, never a string (which would be eval).
+		"source.readyState !== EventSource.CLOSED", "setTimeout(function () { location.reload(); }, 30000)")
+	for _, banned := range []string{"eval(", "Function(", "document.write", "setAttribute('on", ".onclick", "setTimeout('", `setTimeout("`} {
+		if strings.Contains(js, banned) {
+			t.Errorf("LIVE-3: live.js contains %q", banned)
+		}
+	}
+}
+
+// LIVE-4: the detail page of a mirror session shows its charger's location,
+// operator and power, the mirror label and the estimate notice. An API session
+// on an unknown charger is labelled simulated and has no charger details.
+func TestDetail_LIVE4_ChargerContext(t *testing.T) {
+	e := newEnv(t)
+	e.charger("SG-AC-1", "Test Mall", "Testco", "AC", 7_400, false, sgt(0, 18, 7))
+	mirror := e.mirrorSession("SG-AC-1", sgt(0, 0, 7), sgt(0, 10, 7), 1233)
+	sim := e.start("CP-SIM", sgt(0, 15, 7))
+
+	rec := e.get("/sessions/" + mirror)
+	wantHTML(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	wantContains(t, body, "<dt>Location</dt><dd>Test Mall</dd>", "<dt>Operator</dt><dd>Testco</dd>",
+		"<dt>Power</dt><dd>7.4 kW AC</dd>", `<span class="source mirror">mirror</span>`, noticeHTML,
+		tariffText, attribution, liveScript, `data-stream="view=session&amp;id=`+mirror+`"`)
+
+	body = e.get("/sessions/" + sim).Body.String()
+	wantContains(t, body, `<span class="source simulated">simulated</span>`)
+	for _, absent := range []string{"<dt>Location</dt>", "<dt>Power</dt>", noticeHTML} {
+		if strings.Contains(body, absent) {
+			t.Errorf("LIVE-4: simulated session shows %q", absent)
+		}
+	}
+}
+
+// LIVE-4: a failure to load the charger is a generic 500 detail page.
+func TestDetail_LIVE4_ChargerFailureIs500(t *testing.T) {
+	e := newEnv(t)
+	id := e.mirrorSession("SG-1", sgt(0, 0, 7), sgt(0, 10, 7), 100)
+	if _, err := e.pool.Exec(context.Background(), "DROP TABLE chargers"); err != nil {
+		t.Fatal(err)
+	}
+	wantHTML(t, e.get("/sessions/"+id), http.StatusInternalServerError)
+	if !strings.Contains(e.logs.String(), "get charger") {
+		t.Errorf("cause not logged: %q", e.logs.String())
+	}
+}
+
+// LIVE-4: charger details describe the mirror's real chargers, so they are
+// shown only for mirror sessions. An API session that uses the ID of a charger
+// with a chargers row shows no location, operator or power, on the list and
+// on the detail page, and keeps its simulated label.
+func TestPages_LIVE4_ChargerDetailsOnlyForMirror(t *testing.T) {
+	e := newEnv(t)
+	e.charger("SG-REAL-1", "Test Mall", "Testco", "AC", 7_400, false, sgt(0, 18, 7))
+	id := e.start("SG-REAL-1", sgt(0, 15, 7))
+
+	list := e.get("/").Body.String()
+	wantContains(t, list, `>SG-REAL-1</a> <span class="source simulated">simulated</span>`)
+	detail := e.get("/sessions/" + id).Body.String()
+	wantContains(t, detail, `<span class="source simulated">simulated</span>`)
+	for name, body := range map[string]string{"list": list, "detail": detail} {
+		for _, absent := range []string{"Test Mall", "Testco", "7.4 kW", `class="source mirror"`} {
+			if strings.Contains(body, absent) {
+				t.Errorf("LIVE-4: %s page shows %q for an API session", name, absent)
+			}
+		}
+	}
+}
+
+// LIVE-4: the detail page's bar has a legend: a swatch per tariff window with
+// its hours and rate, built from the tariff's values like the header.
+func TestDetail_LIVE4_BarLegend(t *testing.T) {
+	e := newEnv(t)
+	id := e.mockup("CP-01")
+	wantContains(t, e.get("/sessions/"+id).Body.String(),
+		`<ul class="legend" aria-label="Bar legend">`,
+		`<li><span class="swatch peak"></span>Peak 07:00–23:00 · 62¢/kWh</li>`,
+		`<li><span class="swatch offpeak"></span>Off-peak 23:00–07:00 · 48¢/kWh</li>`)
+
+	// No bar, no legend.
+	active := e.start("CP-02", sgt(0, 15, 7))
+	if body := e.get("/sessions/" + active).Body.String(); strings.Contains(body, `class="legend"`) {
+		t.Errorf("LIVE-4: legend shown without a bar")
+	}
 }
