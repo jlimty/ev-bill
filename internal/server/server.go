@@ -33,7 +33,8 @@ func withDeadline(d time.Duration, next http.Handler) http.Handler {
 }
 
 // Deps is what the handler needs. Hub may be nil, which turns GET /events
-// into a 503; Feed is passed through to the pages.
+// into a 503; otherwise every API write that changes a session publishes to
+// it (LIVE-3). Feed is passed through to the pages.
 type Deps struct {
 	Store  *store.Store
 	Tariff billing.Tariff
@@ -59,8 +60,13 @@ func New(d Deps) http.Handler {
 func build(d Deps, timeout time.Duration) http.Handler {
 	pages := &web.Pages{Store: d.Store, Tariff: d.Tariff, Now: d.Now, Logger: d.Logger, Hub: d.Hub, Feed: d.Feed}
 
+	var onChange func()
+	if d.Hub != nil {
+		onChange = d.Hub.Publish
+	}
+
 	inner := http.NewServeMux()
-	(&api.Server{Store: d.Store, Tariff: d.Tariff, APIKey: d.APIKey, Now: d.Now, Logger: d.Logger}).Register(inner)
+	(&api.Server{Store: d.Store, Tariff: d.Tariff, APIKey: d.APIKey, Now: d.Now, Logger: d.Logger, OnChange: onChange}).Register(inner)
 	pages.Register(inner)
 	inner.Handle("GET /healthz", Health(d.Store, healthTimeout, d.Logger))
 

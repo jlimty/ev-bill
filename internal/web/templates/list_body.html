@@ -1,8 +1,16 @@
-{{define "list_body"}}{{range .Rows}}<tr>
-<td><a href="/sessions/{{.ID}}">{{.Charger}}</a></td>
-<td>{{.Started}}</td>
+{{define "list_body"}}<p class="feed{{if .Feed.Warn}} warn{{end}}">{{.Feed.Text}}</p>
+<table>
+<thead><tr><th>Charger</th><th>Location</th><th>Started</th><th>Status</th><th class="num">Energy</th><th class="num">Cost</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr>
+<td><a href="/sessions/{{.ID}}">{{.Charger}}</a> <span class="source {{.Source}}">{{.Source}}</span></td>
+<td>{{if .Location}}{{.Location}}<div class="sub">{{.Info}}</div>{{else}}<span class="sub">-</span>{{end}}</td>
+<td>{{.Started}}<div class="sub">{{.Ago}}</div></td>
 <td><span class="badge {{.Status}}">{{.Status}}</span></td>
 <td class="num">{{.Energy}}</td>
 <td class="num">{{.Cost}}</td>
 </tr>
-{{end}}{{end}}
+{{else}}<tr><td colspan="6" class="empty">No sessions yet. Sessions appear here as soon as a charger starts one.</td></tr>
+{{end}}</tbody>
+{{if .Rows}}<tfoot><tr><td colspan="4">Total</td><td class="num">{{.TotalEnergy}}</td><td class="num">{{.TotalCost}}</td></tr></tfoot>
+{{end}}</table>{{end}}

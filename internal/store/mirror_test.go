@@ -36,7 +36,7 @@ func mirrorCreate(t *testing.T, s *store.Store, charger string, start time.Time,
 
 func mirrorStop(t *testing.T, s *store.Store, id string, at time.Time, wh int64) {
 	t.Helper()
-	if _, _, err := s.StopSession(ctx(), sessions.SourceMirror, id, billing.Reading{At: at, MeterWh: wh}, now); err != nil {
+	if _, _, _, err := s.StopSession(ctx(), sessions.SourceMirror, id, billing.Reading{At: at, MeterWh: wh}, now); err != nil {
 		t.Fatalf("StopSession(mirror, %s): %v", id, err)
 	}
 }
@@ -194,7 +194,7 @@ func TestStore_MIR4_LastMirrorStopsNewestPerCharger(t *testing.T) {
 	mirrorCreate(t, s, "M-A", at(10, 30, 0, 0), 2_000) // open: not a stop
 
 	api := mustCreate(t, s, "API-B", at(8, 0, 0, 0), 0)
-	if _, _, err := s.StopSession(ctx(), sessions.SourceAPI, api.ID, billing.Reading{At: at(9, 0, 0, 0), MeterWh: 5}, now); err != nil {
+	if _, _, _, err := s.StopSession(ctx(), sessions.SourceAPI, api.ID, billing.Reading{At: at(9, 0, 0, 0), MeterWh: 5}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -258,7 +258,7 @@ func TestStore_MIR9_DeleteCompletedMirrorBefore(t *testing.T) {
 	mirrorStop(t, s, recent.ID, at(9, 0, 0, 0), 10)
 	openOld := mirrorCreate(t, s, "M-OPEN", at(1, 0, 0, 0), 0)
 	api := mustCreate(t, s, "API-OLD", at(1, 0, 0, 0), 0)
-	if _, _, err := s.StopSession(ctx(), sessions.SourceAPI, api.ID, billing.Reading{At: at(2, 0, 0, 0), MeterWh: 5}, now); err != nil {
+	if _, _, _, err := s.StopSession(ctx(), sessions.SourceAPI, api.ID, billing.Reading{At: at(2, 0, 0, 0), MeterWh: 5}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -322,4 +322,67 @@ func TestStore_MIR6_OpenMirrorSessionsReadingsFailure(t *testing.T) {
 	}
 	_, err := s.OpenMirrorSessions(ctx())
 	requirePlainError(t, "OpenMirrorSessions", err)
+}
+
+// LIVE-4: the list carries each session's charger details for the page: a
+// mirror session on a known charger has Charger filled in from the chargers
+// table, and an API session on an unknown charger ID has Charger == nil. The
+// readings still come back sorted for both.
+func TestStore_LIVE4_ListRecentJoinsCharger(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	row := chargerRow("SG-LIVE", datamall.Occupied, false, at(10, 0, 0, 0))
+	row.Current, row.PowerW, row.Operator = "DC", 50_000, "Fastco"
+	if err := s.UpsertChargers(ctx(), []store.ChargerRow{row}); err != nil {
+		t.Fatal(err)
+	}
+	m := mirrorCreate(t, s, "SG-LIVE", at(10, 0, 0, 0), 0)
+	for _, r := range []billing.Reading{{At: at(10, 10, 0, 0), MeterWh: 300}, {At: at(10, 5, 0, 0), MeterWh: 200}} {
+		if _, _, _, err := s.AddReading(ctx(), sessions.SourceMirror, m.ID, r, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := mustCreate(t, s, "API-UNKNOWN", at(9, 0, 0, 0), 0)
+
+	got, err := s.ListRecent(ctx(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	if len(got) != 2 || got[0].Session.ID != m.ID || got[1].Session.ID != api.ID {
+		t.Fatalf("ListRecent = %+v, want [mirror, api]", got)
+	}
+	c := got[0].Charger
+	if c == nil {
+		t.Fatal("LIVE-4: mirror session on a known charger has Charger == nil")
+	}
+	want := row
+	want.ObservedAt = row.ObservedAt.UTC()
+	if *c != want {
+		t.Errorf("LIVE-4: Charger = %+v, want %+v", *c, want)
+	}
+	if c.ObservedAt.Location() != time.UTC {
+		t.Errorf("LIVE-4: ObservedAt location = %v, want UTC", c.ObservedAt.Location())
+	}
+	if rs := got[0].Readings; len(rs) != 2 || rs[0].MeterWh != 200 || rs[1].MeterWh != 300 {
+		t.Errorf("mirror readings = %+v, want 200 then 300", rs)
+	}
+	if got[1].Charger != nil {
+		t.Errorf("LIVE-4: API session on an unknown charger has Charger = %+v, want nil", *got[1].Charger)
+	}
+	if rs := got[1].Readings; rs == nil || len(rs) != 0 {
+		t.Errorf("API readings = %#v, want an empty, non-nil slice", rs)
+	}
+}
+
+// API-2: with the chargers table gone, the joined list fails with a plain error.
+func TestStore_LIVE4_ListRecentChargersFailure(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	s := store.New(pool)
+	mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
+	if _, err := pool.Exec(ctx(), "DROP TABLE chargers"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.ListRecent(ctx(), 5)
+	requirePlainError(t, "ListRecent", err)
 }

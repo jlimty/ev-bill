@@ -37,7 +37,7 @@ type MirrorStore interface {
 	LastMirrorStops(ctx context.Context) (map[string]store.MirrorStop, error)
 	CreateSession(ctx context.Context, as sessions.Source, chargerID string, startedAt time.Time, meterStartWh int64, now time.Time) (sessions.Session, error)
 	AddReading(ctx context.Context, as sessions.Source, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error)
-	StopSession(ctx context.Context, as sessions.Source, id string, stop billing.Reading, now time.Time) (sessions.Session, []billing.Reading, error)
+	StopSession(ctx context.Context, as sessions.Source, id string, stop billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error)
 	UpsertChargers(ctx context.Context, rows []store.ChargerRow) error
 }
 
@@ -209,7 +209,7 @@ func (r *Reconciler) do(ctx context.Context, a Action, now time.Time) (done bool
 	case ActRead:
 		_, _, _, err = r.Store.AddReading(ctx, sessions.SourceMirror, a.SessionID, point, now)
 	case ActStop:
-		_, _, err = r.Store.StopSession(ctx, sessions.SourceMirror, a.SessionID, point, now)
+		_, _, _, err = r.Store.StopSession(ctx, sessions.SourceMirror, a.SessionID, point, now)
 	default:
 		err = fmt.Errorf("unknown action kind %d", a.Kind)
 	}

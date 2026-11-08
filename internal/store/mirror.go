@@ -135,35 +135,8 @@ func (s *Store) OpenMirrorSessions(ctx context.Context) ([]SessionWithReadings, 
 	if err != nil {
 		return nil, fmt.Errorf("open mirror sessions: %w", err)
 	}
-	if len(list) == 0 {
-		return list, nil
-	}
-
-	ids := make([]string, len(list))
-	index := make(map[string]int, len(list))
-	for i, item := range list {
-		ids[i] = item.Session.ID
-		index[item.Session.ID] = i
-	}
-	rrows, err := s.pool.Query(ctx,
-		`SELECT session_id::text, at, meter_wh FROM meter_readings WHERE session_id = ANY($1::uuid[]) ORDER BY session_id, at`, ids)
-	if err != nil {
-		return nil, fmt.Errorf("open mirror readings: %w", err)
-	}
-	var (
-		id string
-		r  billing.Reading
-	)
-	_, err = pgx.ForEachRow(rrows, []any{&id, &r.At, &r.MeterWh}, func() error {
-		i, ok := index[id]
-		if !ok {
-			return fmt.Errorf("unexpected session id %s", id)
-		}
-		list[i].Readings = append(list[i].Readings, billing.Reading{At: r.At.UTC(), MeterWh: r.MeterWh})
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("open mirror readings: %w", err)
+	if err := attachReadings(ctx, s.pool, list); err != nil {
+		return nil, fmt.Errorf("open mirror sessions: %w", err)
 	}
 	return list, nil
 }
@@ -211,11 +184,22 @@ func scanCharger(row pgx.Row) (ChargerRow, error) {
 		r      ChargerRow
 		status int16
 	)
-	if err := row.Scan(&r.ChargerID, &r.LocationName, &r.Address, &r.PostalCode, &r.Operator, &r.Position, &r.PlugType,
-		&r.Current, &r.PowerW, &r.Price, &r.PriceType, &status, &r.Held, &r.ObservedAt); err != nil {
+	if err := row.Scan(chargerFields(&r, &status)...); err != nil {
 		return ChargerRow{}, err
 	}
+	finishCharger(&r, status)
+	return r, nil
+}
+
+// chargerFields returns the scan destinations for chargerColumns, in order.
+// The status column goes to status; finishCharger then copies it into r.
+func chargerFields(r *ChargerRow, status *int16) []any {
+	return []any{&r.ChargerID, &r.LocationName, &r.Address, &r.PostalCode, &r.Operator, &r.Position, &r.PlugType,
+		&r.Current, &r.PowerW, &r.Price, &r.PriceType, status, &r.Held, &r.ObservedAt}
+}
+
+// finishCharger completes a scanned row: the status and the time in UTC.
+func finishCharger(r *ChargerRow, status int16) {
 	r.Status = datamall.Status(status)
 	r.ObservedAt = r.ObservedAt.UTC()
-	return r, nil
 }
