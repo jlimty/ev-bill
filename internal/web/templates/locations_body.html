@@ -5,7 +5,7 @@
 {{range .Sites}}<article class="site">
 <div class="head">
 <div><h2>{{.Name}}</h2><p class="sub">{{.Sub}}</p></div>
-<p class="util"><span class="pct">{{.Util}}</span>{{if .Observed}}<span class="label">observed</span>{{end}}</p>
+<p class="util"><span class="pct">{{.Util}}</span>{{if .Observed}}<span class="vh">&nbsp;</span><span class="label">observed</span>{{end}}</p>
 </div>
 <ul class="cells{{if .Muted}} muted{{end}}" aria-hidden="true">
 {{range .Cells}}<li class="cell {{.Class}}" title="{{.Title}}"></li>

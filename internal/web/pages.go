@@ -214,7 +214,7 @@ func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
 // uses. The totals add up the rows' int64 values and are formatted once.
 func (p *Pages) listData(ctx context.Context) (listPage, error) {
 	now := p.Now()
-	feed, err := p.feedLine(ctx, now)
+	feed, err := p.feedLine(ctx, now, p.feedState())
 	if err != nil {
 		return listPage{}, err
 	}
@@ -252,15 +252,21 @@ func (p *Pages) listData(ctx context.Context) (listPage, error) {
 	return data, nil
 }
 
-// feedLine builds the mirror's status line (LIVE-4): off, waiting for the
-// first good poll, unavailable when no poll has succeeded and the last one
+// feedState loads the mirror's current state, or the zero state (mirror off)
+// when the page has no Feed. A page loads it once per render so that every
+// part of the page reads the same state.
+func (p *Pages) feedState() live.FeedState {
+	if p.Feed == nil {
+		return live.FeedState{}
+	}
+	return p.Feed.Load()
+}
+
+// feedLine builds the mirror's status line (LIVE-4) from st: off, waiting for
+// the first good poll, unavailable when no poll has succeeded and the last one
 // failed, live, or delayed once the last good poll is more than
 // feedDelayedAfter old, plus the connectors held after a 48 h stop (MIR-12).
-func (p *Pages) feedLine(ctx context.Context, now time.Time) (feedLine, error) {
-	var st live.FeedState
-	if p.Feed != nil {
-		st = p.Feed.Load()
-	}
+func (p *Pages) feedLine(ctx context.Context, now time.Time, st live.FeedState) (feedLine, error) {
 	if !st.Enabled {
 		return feedLine{Text: "Live mirror off"}, nil
 	}

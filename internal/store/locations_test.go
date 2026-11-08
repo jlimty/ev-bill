@@ -213,7 +213,10 @@ func TestStore_LOC6_EnergyAndValue(t *testing.T) {
 		siteCharger("SG-A", "100001", "Mall A", "Testco", "0.6976", "kWh", locObs),
 		siteCharger("SG-B", "100002", "Mall B", "Testco", "0.70", "kWh", locObs),
 		siteCharger("SG-C", "100002", "Mall B", "Testco", "0.70", "kWh", locObs),
-	}, nil)
+	}, []store.OccupancySample{ // both sites watched from since onwards
+		sample("100001", locSince, 1, 1, 0),
+		sample("100002", locSince, 1, 1, 0),
+	})
 
 	// Before since: left out.
 	early := locSession(t, s, sessions.SourceMirror, "SG-A", locSince.Add(-2*time.Hour), 0)
@@ -257,7 +260,7 @@ func TestStore_LOC6_PriceNACounted(t *testing.T) {
 	applyObservation(t, s, []store.ChargerRow{
 		siteCharger("SG-1", "100001", "Mall", "Testco", "0.50", "", locObs),
 		siteCharger("SG-2", "100001", "Mall", "Testco", "", "free", locObs),
-	}, nil)
+	}, []store.OccupancySample{sample("100001", locSince, 1, 1, 0)})
 	na := locSession(t, s, sessions.SourceMirror, "SG-1", locSince.Add(time.Hour), 0)
 	locStop(t, s, sessions.SourceMirror, na, locSince.Add(2*time.Hour), 800)
 	free := locSession(t, s, sessions.SourceMirror, "SG-2", locSince.Add(time.Hour), 100)
@@ -267,6 +270,75 @@ func TestStore_LOC6_PriceNACounted(t *testing.T) {
 	if a.Sessions != 2 || a.EnergyWh != 1_000 || a.ValueCents != 0 || a.PriceNASessions != 1 {
 		t.Errorf("site = %d sessions, %d Wh, %d c, %d n/a; want 2, 1000, 0, 1",
 			a.Sessions, a.EnergyWh, a.ValueCents, a.PriceNASessions)
+	}
+}
+
+// LOC-6 "over the same window", LOC-2: a site's sessions cover the same window
+// as its utilization, which starts at its first sample when that is later than
+// since. A session started before the first sample is left out, one started at
+// exactly the first sample counts, and a site with no sample has no sessions,
+// energy or value.
+func TestStore_LOC6_SessionsInSiteWindow(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	first := locSince.Add(2 * time.Hour)
+	applyObservation(t, s, []store.ChargerRow{
+		siteCharger("SG-A1", "100001", "Watched", "Testco", "0.50", "kWh", locObs),
+		siteCharger("SG-A2", "100001", "Watched", "Testco", "0.50", "kWh", locObs),
+		siteCharger("SG-A3", "100001", "Watched", "Testco", "0.50", "kWh", locObs),
+		siteCharger("SG-B1", "100002", "Unwatched", "Testco", "0.50", "kWh", locObs),
+	}, []store.OccupancySample{sample("100001", first, 1, 1, 0)})
+
+	before := locSession(t, s, sessions.SourceMirror, "SG-A1", first.Add(-time.Minute), 0)
+	locStop(t, s, sessions.SourceMirror, before, first.Add(time.Hour), 4_000)
+	atFirst := locSession(t, s, sessions.SourceMirror, "SG-A2", first, 0)
+	locStop(t, s, sessions.SourceMirror, atFirst, first.Add(time.Hour), 1_000) // 50 c
+	after := locSession(t, s, sessions.SourceMirror, "SG-A3", first.Add(time.Hour), 0)
+	locStop(t, s, sessions.SourceMirror, after, first.Add(2*time.Hour), 600) // 30 c
+	unwatched := locSession(t, s, sessions.SourceMirror, "SG-B1", first, 0)
+	locStop(t, s, sessions.SourceMirror, unwatched, first.Add(time.Hour), 2_000)
+
+	got := listLocations(t, s)
+	if len(got) != 2 {
+		t.Fatalf("Locations = %+v, want two sites", got)
+	}
+	a, b := got[0], got[1]
+	if !a.FirstSample.Equal(first) {
+		t.Fatalf("FirstSample = %v, want %v", a.FirstSample, first)
+	}
+	if a.Sessions != 2 || a.EnergyWh != 1_600 || a.ValueCents != 80 || a.PriceNASessions != 0 {
+		t.Errorf("watched site = %d sessions, %d Wh, %d c, %d n/a; want 2, 1600, 80, 0 (the session before the first sample left out)",
+			a.Sessions, a.EnergyWh, a.ValueCents, a.PriceNASessions)
+	}
+	if b.Samples != 0 || b.Sessions != 0 || b.EnergyWh != 0 || b.ValueCents != 0 || b.PriceNASessions != 0 {
+		t.Errorf("site with no sample = %d samples, %d sessions, %d Wh, %d c, %d n/a; want all 0",
+			b.Samples, b.Sessions, b.EnergyWh, b.ValueCents, b.PriceNASessions)
+	}
+}
+
+// LOC-5: chargers sort by charger_id in byte order, as Go compares strings,
+// whatever the database's collation, so the site's name (its lowest
+// charger_id's) and the cell order agree with Go. In byte order "-" (0x2D)
+// comes before "1" (0x31); en_US.UTF-8 under glibc ignores the hyphen and
+// would put AB1 first.
+func TestStore_LOC5_ChargerIDByteOrder(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	applyObservation(t, s, []store.ChargerRow{
+		siteCharger("AB1", "100001", "One Name", "Testco", "0.50", "kWh", locObs),
+		siteCharger("AB-2", "100001", "Dash Name", "Testco", "0.50", "kWh", locObs),
+	}, nil)
+
+	a := onlySite(t, listLocations(t, s), "100001")
+	ids := make([]string, len(a.Chargers))
+	for i, c := range a.Chargers {
+		ids[i] = c.ChargerID
+	}
+	if want := []string{"AB-2", "AB1"}; !slices.Equal(ids, want) || !slices.IsSorted(ids) {
+		t.Errorf("charger order = %v, want %v (byte order)", ids, want)
+	}
+	if a.Name != "Dash Name" {
+		t.Errorf("Name = %q, want Dash Name (AB-2 is the lowest charger_id in byte order)", a.Name)
 	}
 }
 

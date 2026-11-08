@@ -196,16 +196,17 @@ Observed figures come straight from LTA's occupancy data:
 
 - **Utilization** is busy ÷ (busy + free), summed over the occupancy samples the mirror writes on every applied poll. Out-of-service connectors are not capacity, so they are left out. Time the mirror was not watching (sleep, deploy, feed outage) has no samples, so it never counts as idle. A site whose connectors were all out of service shows `n/a`.
 - **The 24-hour strip** is the same ratio by hour of day in Singapore time. Each bar is coloured by the tariff window of its hour. A dotted outline marks an hour with no samples, which is not the same as 0%.
-- **The connector grid** shows each connector's latest state: busy (solid), free (outline) or out of service (hatched), with a text count beside it. When the mirror is off or the feed is delayed, the grid is greyed and the count reads "as of HH:MM".
+- **The connector grid** shows each connector's latest state: busy (solid), free (outline) or out of service (hatched), with a text count beside it. When the mirror is off, the feed is delayed, or no update has arrived since startup, the grid is greyed and the count reads "as of HH:MM", with the date when that is not today.
 - **The headline** pools busy and free time across the sites that have enough data, so larger sites weigh more. It is not an average of the sites' percentages.
+
+**Billing sessions** count the mirror sessions started in the window at a site's chargers. The count is not an estimate. A gap or the 48 h limit can split one car's stay into more than one, hence "billing sessions".
 
 Estimated figures are labelled "est.":
 
-- **Billing sessions** are the mirror sessions started in the window. A gap or the 48 h limit can split one car's stay into more than one.
 - **Est. energy** is those sessions' estimated energy (rated power, see [Live mirror](#live-mirror)).
 - **Est. value** is each session's energy at its charger's posted price today, applied to the whole window. A charger whose price type is not per kWh or free has no usable price, so its sessions are left out and counted as "price n/a".
 
-The window is the last 14 days, or since the first sample when that is later ("Since 8 Nov · 31 h observed"). A site needs 288 samples (24 h observed) before it is ranked or counted in the headline. Until then it shows "collecting data · N h" and follows the ranked sites, which are ordered least used first.
+The window is the last 14 days, or since the first sample when that is later ("Since 8 Nov · 31 h observed"). Each site's utilization, sessions, energy and value share its window, so a site with no samples yet shows 0 billing sessions. A site needs 288 samples (24 h observed) before it is ranked or counted in the headline. Until then it shows "collecting data · N h" and follows the ranked sites, which are ordered least used first.
 
 ## Quality gates
 

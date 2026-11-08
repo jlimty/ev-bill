@@ -3,8 +3,10 @@ package web
 import (
 	"context"
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -149,7 +151,8 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 	e.mirrorStopped("A-001", sgt(22, 0, 6), sgt(22, 30, 6), 2500) // 2500 Wh x 0.6976 = 174.4 -> 174 cents
 	e.mirrorStopped("A-001", sgt(23, 0, 6), sgt(23, 30, 6), 1000) // 1000 Wh x 0.6976 = 69.76 -> 70 cents
 	e.mirrorStopped("A-002", sgt(21, 0, 6), sgt(21, 30, 6), 500)  // price n/a
-	e.mirrorStopped("C-001", sgt(19, 0, 6), sgt(19, 30, 6), 300)  // price n/a
+	e.mirrorStopped("C-001", sgt(19, 20, 6), sgt(19, 30, 6), 300) // price n/a; at Charlie's first sample, 19:20
+	e.mirrorStopped("C-001", sgt(19, 0, 6), sgt(19, 10, 6), 900)  // before Charlie's first sample: left out (LOC-6)
 	e.mirrorStopped("C-001", sgt(20, 0, 6), sgt(20, 30, 6), 700)  // price n/a
 
 	body := e.get("/locations").Body.String()
@@ -174,7 +177,7 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 
 	a := card(t, body, "Alpha Mall")
 	wantContains(t, a, `<p class="sub">Otherco, Testco · 2 connectors</p>`,
-		`<span class="pct">25%</span><span class="label">observed</span>`,
+		`<span class="pct">25%</span><span class="vh">&nbsp;</span><span class="label">observed</span>`,
 		`<p class="facts">3 billing sessions · est. 4.0 kWh · est. $2.44 at today&#39;s posted price · price n/a for 1 session</p>`)
 	if strings.Contains(a, "collecting data") {
 		t.Errorf("LOC-4: sufficient site has a collecting note: %s", a)
@@ -240,9 +243,13 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 	t.Run("no samples yet", func(t *testing.T) {
 		e := newEnv(t)
 		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, nil)
+		// LOC-6: with no sample the site has no window yet, so this session
+		// is not counted next to "0 h".
+		e.mirrorStopped("A-001", sgt(22, 0, 6), sgt(22, 30, 6), 2500)
 		body := e.get("/locations").Body.String()
 		wantContains(t, body, `<p class="headline">Collecting data · 0 h observed so far</p>`,
-			`<span class="pct">n/a</span>`, `<p class="note">collecting data · 0 h</p>`)
+			`<span class="pct">n/a</span>`, `<p class="note">collecting data · 0 h</p>`,
+			`<p class="facts">0 billing sessions · est. 0.0 kWh · est. $0.00 at today&#39;s posted price</p>`)
 		if strings.Contains(body, `class="window"`) {
 			t.Errorf("LOC-4: a window line with no sample to date it: %s", body)
 		}
@@ -290,8 +297,9 @@ func TestLocations_LOC5_CellsAndCount(t *testing.T) {
 	}
 }
 
-// LOC-5: when the mirror is off or the feed line warns, the last known states
-// are still drawn, but muted, and the count gives their age.
+// LOC-5: when the mirror is off, the feed line warns, or no poll has
+// succeeded since startup (the stored states are from before it), the last
+// known states are still drawn, but muted, and the count gives their age.
 func TestLocations_LOC5_StaleIsMuted(t *testing.T) {
 	now := fixedNow()
 	for _, tc := range []struct {
@@ -308,7 +316,7 @@ func TestLocations_LOC5_StaleIsMuted(t *testing.T) {
 			`<p class="feed warn">Live feed unavailable · no successful update yet</p>`},
 		{"live", feedState(live.FeedState{Enabled: true, LastGood: now.Add(-2 * time.Minute)}), false,
 			`<p class="feed">Live from LTA DataMall · last update 00:18 (2 min ago)</p>`},
-		{"waiting", feedState(live.FeedState{Enabled: true}), false, `<p class="feed">Waiting for the first live update</p>`},
+		{"waiting", feedState(live.FeedState{Enabled: true}), true, `<p class="feed">Waiting for the first live update</p>`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
@@ -329,6 +337,70 @@ func TestLocations_LOC5_StaleIsMuted(t *testing.T) {
 		})
 	}
 }
+
+// LOC-5: a muted count dates the newest observation when it is not from today
+// in Asia/Singapore, so a stale time is not read as today's. 23:59 SGT on 6
+// Nov is the same UTC day as now (00:20 SGT on 7 Nov), so this also checks
+// the day is Singapore's.
+func TestLocations_LOC5_AsOfDate(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		observed time.Time
+		count    string
+	}{
+		{"today", sgt(0, 0, 7), `<p class="count">as of 00:00 · 1 busy · 0 free</p>`},
+		{"yesterday", sgt(23, 59, 6), `<p class="count">as of 06 Nov 2026 23:59 · 1 busy · 0 free</p>`},
+		{"days ago", sgt(13, 20, 3), `<p class="count">as of 03 Nov 2026 13:20 · 1 busy · 0 free</p>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			row := locCharger("S9-001", "100002", "Small Park", "Testco", datamall.Occupied)
+			row.ObservedAt = tc.observed
+			e.observe([]store.ChargerRow{row}, nil)
+			wantContains(t, e.get("/locations").Body.String(), `<ul class="cells muted" aria-hidden="true">`, tc.count)
+		})
+	}
+}
+
+// LOC-5: the card's subline drops an empty operator rather than leaving a
+// stray separator.
+func TestLocations_LOC5_EmptyOperator(t *testing.T) {
+	e := newEnv(t)
+	none := chargersWith(20, "N1", "100001", "Nameless", datamall.Available, 1)
+	for i := range none {
+		none[i].Operator = ""
+	}
+	e.observe(none, nil)
+	mixed := chargersWith(2, "M1", "100002", "Mixed", datamall.Available, 1)
+	mixed[0].Operator = ""
+	e.observe(mixed, nil)
+
+	body := e.get("/locations").Body.String()
+	wantContains(t, card(t, body, "Nameless"), `<p class="sub">20 connectors</p>`)
+	wantContains(t, card(t, body, "Mixed"), `<p class="sub">Testco · 2 connectors</p>`)
+}
+
+// LOC-2, LOC-7: the utilization figure and its "observed" label read as two
+// words to assistive technology, "25% observed", not "25%observed": the two
+// spans are blocks, so a separator must survive layout.
+func TestLocations_LOC2_UtilReadsAsWords(t *testing.T) {
+	e := newEnv(t)
+	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)},
+		samplesBack("100001", 300, 1, 3, 0))
+	c := card(t, e.get("/locations").Body.String(), "Alpha Mall")
+	start := strings.Index(c, `<p class="util">`)
+	end := strings.Index(c[max(start, 0):], `</p>`)
+	if start < 0 || end < 0 {
+		t.Fatalf("no utilization paragraph in %s", c)
+	}
+	text := html.UnescapeString(tagRE.ReplaceAllString(c[start:start+end], ""))
+	if got := strings.Join(strings.Fields(text), " "); got != "25% observed" {
+		t.Errorf("LOC-2: utilization text = %q, want %q", got, "25% observed")
+	}
+}
+
+// tagRE matches an HTML tag, for reading a fragment's text.
+var tagRE = regexp.MustCompile(`<[^>]*>`)
 
 // LOC-3: 24 bars, one per hour of the day in Asia/Singapore. Hours with
 // samples are coloured by tariff window (IsPeakHour) with a height of their

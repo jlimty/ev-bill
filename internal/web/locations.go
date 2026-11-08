@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/jlimty/ev-bill/internal/datamall"
@@ -90,7 +89,8 @@ func (p *Pages) locationsFragment(ctx context.Context) (fragment, error) {
 // locations.Window (LOC-4, LOC-5, LOC-6, LOC-7).
 func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 	now := p.Now()
-	line, err := p.feedLine(ctx, now)
+	st := p.feedState()
+	line, err := p.feedLine(ctx, now, st)
 	if err != nil {
 		return locationsPage{}, err
 	}
@@ -105,10 +105,9 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 		Notice:     locationsNotice,
 	}
 	data.Nav = navLocations
-	enabled := p.Feed != nil && p.Feed.Load().Enabled
 	if len(aggs) == 0 {
 		data.Empty = line
-		if !enabled {
+		if !st.Enabled {
 			data.Empty = feedLine{Text: emptyLocations}
 		}
 		return data, nil
@@ -138,16 +137,24 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 	} else {
 		data.Headline = fmt.Sprintf("Collecting data · %d h observed so far", maxHours)
 	}
-	// LOC-5: not live when the mirror is off or the feed line warns.
-	muted := !enabled || line.Warn
+	// LOC-5: not live when the mirror is off, the feed line warns, or no poll
+	// has succeeded since startup, when the stored states predate this run.
+	muted := !st.Enabled || line.Warn || st.LastGood.IsZero()
 	asOf := ""
 	if muted {
-		asOf = "as of " + p.clock(newest, false) + " · "
+		asOf = "as of " + p.asOf(now, newest) + " · "
 	}
 	for _, s := range locations.Order(sites) {
 		data.Sites = append(data.Sites, p.siteCard(byPostal[s.PostalCode], muted, asOf))
 	}
 	return data, nil
+}
+
+// asOf formats the newest observation's time for a muted count (LOC-5):
+// "13:20" when it is today in the tariff's location, else with its date.
+func (p *Pages) asOf(now, t time.Time) string {
+	loc := p.Tariff.Location
+	return p.clock(t, !sameDay(now.In(loc), t.In(loc)))
 }
 
 // windowLine states the page's window (LOC-4): "Last 14 days" once the
@@ -171,7 +178,7 @@ func (p *Pages) windowLine(now, earliest time.Time, maxHours int64) string {
 func (p *Pages) siteCard(a store.LocationAggregate, muted bool, asOf string) siteCard {
 	c := siteCard{
 		Name:  a.Name,
-		Sub:   strings.Join(a.Operators, ", ") + " · " + plural(int64(len(a.Chargers)), "connector", "connectors"),
+		Sub:   joinNonEmpty(" · ", joinNonEmpty(", ", a.Operators...), plural(int64(len(a.Chargers)), "connector", "connectors")),
 		Muted: muted,
 		Util:  "n/a",
 		Facts: fmt.Sprintf("%s · est. %s · est. %s at today's posted price",
