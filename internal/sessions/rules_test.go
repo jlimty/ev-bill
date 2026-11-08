@@ -340,3 +340,36 @@ func TestHalfSetStop_SES3(t *testing.T) {
 		t.Errorf("half-set stop: status=%q err=%v, want not completed", v.Status, err)
 	}
 }
+
+// manyReadings returns n valid readings, one per second from 10:00:01, meter 1 Wh each step.
+func manyReadings(n int) []billing.Reading {
+	rs := make([]billing.Reading, n)
+	for i := range rs {
+		rs[i] = billing.Reading{At: at(10, 0, 0).Add(time.Duration(i+1) * time.Second), MeterWh: int64(i + 1)}
+	}
+	return rs
+}
+
+// SES-2: a session holds at most 10000 readings; an identical retry at the cap
+// is still a duplicate.
+func TestCheckReading_SES2_ReadingCap(t *testing.T) {
+	s := Session{ID: "s1", ChargerID: "CP-01", StartedAt: at(10, 0, 0), MeterStartWh: 0}
+	now := at(13, 0, 0)
+	next := billing.Reading{At: at(10, 0, 0).Add(10_001 * time.Second), MeterWh: 20_000}
+
+	if _, err := CheckReading(s, manyReadings(9_999), next, now); err != nil {
+		t.Errorf("9999 readings stored: err = %v, want accepted", err)
+	}
+	full := manyReadings(10_000)
+	_, err := CheckReading(s, full, next, now)
+	wantRule(t, "10000 readings stored", err, KindInvalid, "invalid_reading")
+	if err == nil || !strings.Contains(err.Error(), "10000-reading limit") {
+		t.Errorf("err = %v, want message containing %q", err, "10000-reading limit")
+	}
+	dup, err := CheckReading(s, full, full[42], now)
+	if err != nil || !dup {
+		t.Errorf("identical retry at cap: dup = %v, err = %v, want true, nil", dup, err)
+	}
+	_, err = CheckReading(s, full, billing.Reading{At: full[42].At, MeterWh: 999}, now)
+	wantRule(t, "conflict at cap", err, KindConflict, "conflicting_reading")
+}

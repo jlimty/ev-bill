@@ -5,6 +5,7 @@
 package sessions
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"time"
@@ -166,6 +167,9 @@ func CheckReading(s Session, readings []billing.Reading, r billing.Reading, now 
 				after = p
 			}
 		}
+	}
+	if len(readings) >= MaxReadings {
+		return false, invalid("invalid_reading", fmt.Sprintf("session has reached the %d-reading limit", MaxReadings))
 	}
 	if (before != nil && r.MeterWh < before.MeterWh) || (after != nil && r.MeterWh > after.MeterWh) {
 		return false, invalid("invalid_reading", "meter_wh is inconsistent with neighbouring readings")

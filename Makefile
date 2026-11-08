@@ -17,8 +17,15 @@ lint:
 	go vet ./...
 	golangci-lint run
 
+# Two profiles. coverage.out covers all of internal/... from every package's
+# tests: it feeds the 80% total gate and is the SonarQube input.
+# coverage-billing.out comes from internal/billing's own tests only, so the 95%
+# billing gate cannot be met by other packages exercising billing code.
 test:
 	go test -race -covermode=atomic -coverpkg=./internal/... -coverprofile=coverage.out ./...
+	@if [ -d internal/billing ]; then \
+		go test -race -covermode=atomic -coverprofile=coverage-billing.out ./internal/billing; \
+	fi
 	scripts/coverage-gate.sh
 
 # -count=1 matters: Go's test cache does not notice a changed TZ, so without it

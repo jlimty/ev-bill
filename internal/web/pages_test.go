@@ -257,3 +257,71 @@ func TestPages_NeedNoScriptOrExternalResources(t *testing.T) {
 		}
 	}
 }
+
+// UI-2: a session inside one local day keeps the short "HH:MM – HH:MM" times.
+func TestDetailPage_UI2_SameDayTimesHaveNoDate(t *testing.T) {
+	e := newEnv(t)
+	id := e.start("CP-02", sgt(10, 0, 6))
+	e.reading(id, sgt(10, 30, 6), 3000)
+	if _, _, err := e.st.StopSession(context.Background(), id, billing.Reading{At: sgt(12, 0, 6), MeterWh: 9000}, fixedNow()); err != nil {
+		t.Fatalf("stop session: %v", err)
+	}
+	body := e.get("/sessions/" + id).Body.String()
+	wantContains(t, body, "10:00 – 12:00")
+	if strings.Contains(body, "06 Nov 10:00") {
+		t.Errorf("same-day segment shows a date: %s", body)
+	}
+}
+
+// UI-2: under 24 h the rows keep the short form even across midnight (the mockup).
+func TestDetailPage_UI2_MockupSegmentsStayShort(t *testing.T) {
+	e := newEnv(t)
+	id := e.mockup("CP-01")
+	body := e.get("/sessions/" + id).Body.String()
+	wantContains(t, body, "21:40 – 23:00", "23:00 – 00:15")
+	if strings.Contains(body, "06 Nov 21:40") || strings.Contains(body, "06 Nov 23:00") {
+		t.Errorf("segment rows show a date: %s", body)
+	}
+}
+
+// UI-2: 23 h 59 min is still short.
+func TestDetailPage_UI2_JustUnder24hStaysShort(t *testing.T) {
+	e := newEnv(t)
+	id := e.start("CP-04", sgt(7, 0, 6))
+	now := sgt(8, 0, 7)
+	if _, _, err := e.st.StopSession(context.Background(), id, billing.Reading{At: sgt(6, 59, 7), MeterWh: 20000}, now); err != nil {
+		t.Fatalf("stop session: %v", err)
+	}
+	body := e.get("/sessions/" + id).Body.String()
+	wantContains(t, body, "07:00 – 23:00", "23:00 – 06:59")
+	if strings.Contains(body, "06 Nov 07:00") {
+		t.Errorf("under-24h segment shows a date: %s", body)
+	}
+}
+
+// UI-2: from 24 h, rows show dates so the two 07:00 – 23:00 peaks differ; the
+// end date is left out when it is the segment's own day.
+func TestDetailPage_UI2_FortyEightHourSegmentsShowDates(t *testing.T) {
+	e := newEnv(t)
+	id := e.start("CP-03", sgt(7, 0, 6))
+	now := sgt(8, 0, 8)
+	stop := billing.Reading{At: sgt(7, 0, 8), MeterWh: 48000}
+	if _, _, err := e.st.StopSession(context.Background(), id, stop, now); err != nil {
+		t.Fatalf("stop session: %v", err)
+	}
+	body := e.get("/sessions/" + id).Body.String()
+	wantContains(t, body, "06 Nov 07:00 – 23:00", "07 Nov 07:00 – 23:00",
+		"06 Nov 23:00 – 07 Nov 07:00", "07 Nov 23:00 – 08 Nov 07:00")
+}
+
+// UI-2: exactly 24 h is the boundary: rows are dated (07:00 -> 07:00 next day).
+func TestDetailPage_UI2_Exactly24hShowsDates(t *testing.T) {
+	e := newEnv(t)
+	id := e.start("CP-05", sgt(7, 0, 6))
+	now := sgt(8, 0, 7)
+	if _, _, err := e.st.StopSession(context.Background(), id, billing.Reading{At: sgt(7, 0, 7), MeterWh: 24000}, now); err != nil {
+		t.Fatalf("stop session: %v", err)
+	}
+	body := e.get("/sessions/" + id).Body.String()
+	wantContains(t, body, "06 Nov 07:00 – 23:00", "06 Nov 23:00 – 07 Nov 07:00")
+}

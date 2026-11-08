@@ -461,3 +461,58 @@ func TestRequestLogger_OPS5_HealthzLevel(t *testing.T) {
 		t.Errorf("OPS-5: healthy probe logged at Info: %q", buf.String())
 	}
 }
+
+// OPS-2: every request context carries a deadline, so a handler waiting on it
+// sees context.DeadlineExceeded (not Canceled) once the deadline passes.
+func TestWithDeadline_OPS2(t *testing.T) {
+	var got error
+	h := withDeadline(50*time.Millisecond, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			got = r.Context().Err()
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	start := time.Now()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+	if !errors.Is(got, context.DeadlineExceeded) {
+		t.Errorf("ctx err = %v, want context.DeadlineExceeded", got)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("handler waited %s, want about 50ms", d)
+	}
+}
+
+// OPS-2: the production deadline is 8 s, below Serve's 10 s WriteTimeout.
+func TestRequestTimeout_OPS2(t *testing.T) {
+	if requestTimeout != 8*time.Second {
+		t.Errorf("requestTimeout = %s, want 8s", requestTimeout)
+	}
+}
+
+// OPS-2: the handler New builds applies the deadline: a request context carries
+// it, the handler returns once it passes, and the logged status is the real one.
+func TestNewHandler_OPS2_AppliesDeadline(t *testing.T) {
+	var got error
+	var buf bytes.Buffer
+	h := newHandler(slog.New(slog.NewJSONHandler(&buf, nil)), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			got = r.Context().Err()
+			w.WriteHeader(http.StatusInternalServerError)
+		case <-time.After(2 * time.Second):
+		}
+	}), 50*time.Millisecond)
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/slow", nil))
+	if !errors.Is(got, context.DeadlineExceeded) {
+		t.Errorf("ctx err = %v, want context.DeadlineExceeded", got)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("returned after %s, want about 50ms", d)
+	}
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(buf.String(), `"status":500`) {
+		t.Errorf("status = %d, log = %s, want 500 logged", rec.Code, buf.String())
+	}
+}
