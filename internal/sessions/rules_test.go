@@ -400,3 +400,20 @@ func TestCheckWriter_MIR7(t *testing.T) {
 		})
 	}
 }
+
+// MIR-7: an unknown or zero source is a programmer error, not a RuleError.
+func TestCheckWriter_MIR7_InvalidSource(t *testing.T) {
+	for _, as := range []Source{"", "other"} {
+		if ValidSource(as) {
+			t.Errorf("MIR-7: ValidSource(%q) = true", as)
+		}
+		err := CheckWriter(Session{Source: SourceAPI}, as)
+		var re *RuleError
+		if err == nil || errors.As(err, &re) {
+			t.Errorf("MIR-7: CheckWriter(as=%q) err = %v, want plain error", as, err)
+		}
+	}
+	if !ValidSource(SourceAPI) || !ValidSource(SourceMirror) {
+		t.Error("MIR-7: api and mirror must be valid")
+	}
+}

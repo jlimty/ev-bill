@@ -71,7 +71,7 @@ A small Go service that bills EV charging sessions, delivered through spec-first
 - The Content-Security-Policy is `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`; `script-src` and `connect-src` allow the live push (LIVE-3).
 
 ## Operations (Render-ready from the first commit)
-- **OPS-1** Config from env: `PORT`, `DATABASE_URL`, `API_KEY`. Fail fast at startup if any are missing. Optional: `LTA_ACCOUNT_KEY` and `DATAMALL_BASE_URL` (MIR-10 in the live-mirror design).
+- **OPS-1** Config from env: `PORT`, `DATABASE_URL`, `API_KEY`. Fail fast at startup if any are missing. Optional: `LTA_ACCOUNT_KEY`, `DATAMALL_BASE_URL` and `MIRROR_POSTAL_CODES` (MIR-10 in the live-mirror design).
 - **OPS-2** `/healthz` returns 200 if a DB ping succeeds within 2 s, else 503.
 - **OPS-3** Graceful shutdown on SIGTERM/SIGINT: stop accepting, finish in-flight requests, exit within 10 s.
 - **OPS-4** SQL migrations embedded in the binary and applied at startup (Render's pre-deploy step is paid-only).

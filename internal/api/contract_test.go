@@ -246,7 +246,7 @@ func TestContract_ValidatesResponses(t *testing.T) {
 		{"missing source rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"source":"api",`, ``, 1) }), false},
 		{"unknown source rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"source":"api"`, `"source":"other"`, 1) }), false},
 		{"mirror source accepted", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"source":"api"`, `"source":"mirror"`, 1) }), true},
-		{"mirror_session error accepted", "GET", sessPath, 404, `{"error":{"code":"mirror_session","message":"x"}}`, true},
+		{"mirror_session error accepted", "POST", sessPath + "/meter-values", 409, `{"error":{"code":"mirror_session","message":"x"}}`, true},
 		{"negative energy_wh rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"energy_wh":0`, `"energy_wh":-1`, 1) }), false},
 		{"unknown error code rejected", "GET", sessPath, 404, `{"error":{"code":"nope","message":"x"}}`, false},
 		{"list of 51 rejected", "GET", "/api/sessions", 200, list(51), false},

@@ -566,3 +566,16 @@ func TestStore_MIR7_SourceRoundTrips(t *testing.T) {
 		t.Errorf("MIR-7: ListRecent sources = %v", have)
 	}
 }
+
+// MIR-7: CreateSession rejects an unknown or zero source with a plain error.
+func TestStore_MIR7_CreateRejectsInvalidSource(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	for _, as := range []sessions.Source{"", "other"} {
+		_, err := s.CreateSession(ctx(), as, "CH-X", at(10, 0, 0, 0), 0, now)
+		var re *sessions.RuleError
+		if err == nil || errors.As(err, &re) {
+			t.Errorf("MIR-7: CreateSession(as=%q) err = %v, want plain error", as, err)
+		}
+	}
+}

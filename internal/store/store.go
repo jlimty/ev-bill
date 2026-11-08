@@ -59,9 +59,12 @@ func (s *Store) Ping(ctx context.Context) error {
 	return nil
 }
 
-// CreateSession starts a session (SES-1) owned by as (MIR-7). It fails with a Conflict
-// active_session_exists if the charger already has an active session.
+// CreateSession starts a session (SES-1) owned by as (MIR-7). It fails with a
+// Conflict active_session_exists if the charger already has an active session.
 func (s *Store) CreateSession(ctx context.Context, as sessions.Source, chargerID string, startedAt time.Time, meterStartWh int64, now time.Time) (sessions.Session, error) {
+	if !sessions.ValidSource(as) {
+		return sessions.Session{}, fmt.Errorf("create session: invalid source %q", as)
+	}
 	startedAt = norm(startedAt)
 	if err := sessions.CheckStart(chargerID, startedAt, meterStartWh, now); err != nil {
 		return sessions.Session{}, err
@@ -78,10 +81,11 @@ func (s *Store) CreateSession(ctx context.Context, as sessions.Source, chargerID
 	return sess, nil
 }
 
-// AddReading stores a meter reading (SES-2, SES-6), refusing a writer that does not own the session (MIR-7), and returns the session with
-// its readings as of the end of the same transaction. The session row is locked
-// for the transaction, so concurrent calls for one session run one at a time
-// and an identical repeat is reported as duplicate, not stored twice.
+// AddReading stores a meter reading (SES-2, SES-6), refusing a writer that does
+// not own the session (MIR-7), and returns the session with its readings as of
+// the end of the same transaction. The session row is locked for the
+// transaction, so concurrent calls for one session run one at a time and an
+// identical repeat is reported as duplicate, not stored twice.
 func (s *Store) AddReading(ctx context.Context, as sessions.Source, id string, r billing.Reading, now time.Time) (sessions.Session, []billing.Reading, bool, error) {
 	id, ok := parseUUID(id)
 	if !ok {
@@ -127,8 +131,9 @@ func (s *Store) AddReading(ctx context.Context, as sessions.Source, id string, r
 	return out, readings, duplicate, nil
 }
 
-// StopSession stops a session (SES-3), refusing a writer that does not own it (MIR-7). Repeating the identical stop returns
-// the stored session and readings unchanged.
+// StopSession stops a session (SES-3), refusing a writer that does not own it
+// (MIR-7). Repeating the identical stop returns the stored session and readings
+// unchanged.
 func (s *Store) StopSession(ctx context.Context, as sessions.Source, id string, stop billing.Reading, now time.Time) (sessions.Session, []billing.Reading, error) {
 	id, ok := parseUUID(id)
 	if !ok {

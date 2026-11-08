@@ -101,10 +101,16 @@ func EarliestStart() time.Time { return earliestStart }
 
 var chargerIDPattern = regexp.MustCompile(`^[A-Z0-9-]{1,32}$`)
 
+// ValidSource reports whether s is a known source (api or mirror).
+func ValidSource(s Source) bool { return s == SourceAPI || s == SourceMirror }
+
 // CheckWriter refuses a write from a source that does not own the session
 // (MIR-7). The API gets mirror_session and the mirror gets api_session; both
 // are conflicts (409), not permission errors.
 func CheckWriter(s Session, as Source) error {
+	if !ValidSource(as) {
+		return fmt.Errorf("check writer: invalid source %q", as)
+	}
 	if s.Source == as {
 		return nil
 	}
