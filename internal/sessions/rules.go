@@ -13,10 +13,21 @@ import (
 	"github.com/jlimty/ev-bill/internal/billing"
 )
 
+// Source says who writes a session: the public JSON API or the live mirror (MIR-7).
+type Source string
+
+const (
+	// SourceAPI is a session written through the public JSON API.
+	SourceAPI Source = "api"
+	// SourceMirror is a session written by the live mirror of real chargers.
+	SourceMirror Source = "mirror"
+)
+
 // Session is one charging session as stored. StoppedAt and MeterStopWh are
 // both nil while the session is active.
 type Session struct {
 	ID, ChargerID string
+	Source        Source
 	StartedAt     time.Time
 	MeterStartWh  int64
 	StoppedAt     *time.Time
@@ -89,6 +100,19 @@ var earliestStart = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 func EarliestStart() time.Time { return earliestStart }
 
 var chargerIDPattern = regexp.MustCompile(`^[A-Z0-9-]{1,32}$`)
+
+// CheckWriter refuses a write from a source that does not own the session
+// (MIR-7). The API gets mirror_session and the mirror gets api_session; both
+// are conflicts (409), not permission errors.
+func CheckWriter(s Session, as Source) error {
+	if s.Source == as {
+		return nil
+	}
+	if s.Source == SourceMirror {
+		return conflict("mirror_session", "session is owned by the live mirror and is read-only through the API")
+	}
+	return conflict("api_session", "session is owned by the API and is not written by the live mirror")
+}
 
 // isStopped reports whether both stop fields are set.
 func isStopped(s Session) bool { return s.StoppedAt != nil && s.MeterStopWh != nil }

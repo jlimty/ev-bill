@@ -373,3 +373,30 @@ func TestCheckReading_SES2_ReadingCap(t *testing.T) {
 	_, err = CheckReading(s, full, billing.Reading{At: full[42].At, MeterWh: 999}, now)
 	wantRule(t, "conflict at cap", err, KindConflict, "conflicting_reading")
 }
+
+// MIR-7: the API and the mirror never write to each other's sessions.
+func TestCheckWriter_MIR7(t *testing.T) {
+	cases := []struct {
+		name    string
+		session Source
+		as      Source
+		code    string // empty means allowed
+	}{
+		{"api on api", SourceAPI, SourceAPI, ""},
+		{"mirror on mirror", SourceMirror, SourceMirror, ""},
+		{"api on mirror", SourceMirror, SourceAPI, "mirror_session"},
+		{"mirror on api", SourceAPI, SourceMirror, "api_session"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := CheckWriter(Session{Source: c.session}, c.as)
+			if c.code == "" {
+				if err != nil {
+					t.Errorf("MIR-7: err = %v, want nil", err)
+				}
+				return
+			}
+			wantRule(t, c.name, err, KindConflict, c.code)
+		})
+	}
+}

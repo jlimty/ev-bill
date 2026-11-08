@@ -9,7 +9,7 @@ A small Go service that bills EV charging sessions, delivered through spec-first
 - Record every notable AI mistake and which layer caught it.
 
 ## Non-goals
-- OCPP, WebSockets or real charger hardware (a simulator stands in)
+- OCPP, WebSockets or real charger hardware; occupancy comes from LTA DataMall and energy is estimated
 - Payments, invoices, user accounts or multiple tariffs; tariff changes during a session
 - Daylight-saving handling (Singapore has none), horizontal scaling, Docker, React
 
@@ -60,17 +60,18 @@ A small Go service that bills EV charging sessions, delivered through spec-first
 | GET | `/api/sessions` | newest 50 |
 | GET | `/healthz` | OPS-2 |
 
-- **API-1** All POSTs require `X-API-Key`, compared in constant time; 401 otherwise. GETs are public (data is fake).
+- **API-1** All POSTs require `X-API-Key`, compared in constant time; 401 otherwise. GETs are public: the occupancy data is already published openly by LTA DataMall, and the app holds no personal data. Before going live, check that DataMall's licence allows republishing with attribution.
 - **API-2** Errors: `{"error": {"code": "...", "message": "..."}}` with 400/401/404/409/422.
-- **API-3** `api/openapi.yaml` is the contract, written before the handlers. Tests validate real responses against it.
+- **API-3** `api/openapi.yaml` is the contract, written before the handlers. Tests validate real responses against it. It gains `source` (`api` or `mirror`) on sessions and the `mirror_session` error code (MIR-7 in the live-mirror design).
 
 ## Status page
-- **UI-1** `/` lists the newest 50 sessions (charger, start, status badge, energy, cost) and refreshes every 3 s.
+- **UI-1** `/` lists the newest 50 sessions (charger, start, status badge, energy, cost) and updates live by push (LIVE-1..3 in the live-mirror design); the 3 s meta refresh stays as the no-JS fallback.
 - **UI-2** `/sessions/{id}` shows a horizontal bar of peak/off-peak segments with boundary times, plus a segment table (window, energy, rate, cost) and the total.
 - Built with Go's `html/template` and a little CSS. No JavaScript framework.
+- The Content-Security-Policy is `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`; `script-src` and `connect-src` allow the live push (LIVE-3).
 
 ## Operations (Render-ready from the first commit)
-- **OPS-1** Config from env: `PORT`, `DATABASE_URL`, `API_KEY`. Fail fast at startup if any are missing.
+- **OPS-1** Config from env: `PORT`, `DATABASE_URL`, `API_KEY`. Fail fast at startup if any are missing. Optional: `LTA_ACCOUNT_KEY` and `DATAMALL_BASE_URL` (MIR-10 in the live-mirror design).
 - **OPS-2** `/healthz` returns 200 if a DB ping succeeds within 2 s, else 503.
 - **OPS-3** Graceful shutdown on SIGTERM/SIGINT: stop accepting, finish in-flight requests, exit within 10 s.
 - **OPS-4** SQL migrations embedded in the binary and applied at startup (Render's pre-deploy step is paid-only).

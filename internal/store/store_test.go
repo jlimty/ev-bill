@@ -89,7 +89,7 @@ func requireRule(t *testing.T, err error, kind sessions.Kind, code string) {
 
 func mustCreate(t *testing.T, s *store.Store, charger string, start time.Time, wh int64) sessions.Session {
 	t.Helper()
-	sess, err := s.CreateSession(ctx(), charger, start, wh, now)
+	sess, err := s.CreateSession(ctx(), sessions.SourceAPI, charger, start, wh, now)
 	if err != nil {
 		t.Fatalf("CreateSession(%s): %v", charger, err)
 	}
@@ -115,13 +115,13 @@ func TestCreateSession_SES1_OneActivePerCharger(t *testing.T) {
 		t.Fatalf("unexpected session %+v", first)
 	}
 
-	_, err := s.CreateSession(ctx(), "CH-1", at(10, 5, 0, 0), 1000, now)
+	_, err := s.CreateSession(ctx(), sessions.SourceAPI, "CH-1", at(10, 5, 0, 0), 1000, now)
 	requireRule(t, err, sessions.KindConflict, "active_session_exists")
 
 	// A different charger is independent.
 	mustCreate(t, s, "CH-2", at(10, 0, 0, 0), 0)
 
-	if _, _, err := s.StopSession(ctx(), first.ID, billing.Reading{At: at(10, 30, 0, 0), MeterWh: 2000}, now); err != nil {
+	if _, _, err := s.StopSession(ctx(), sessions.SourceAPI, first.ID, billing.Reading{At: at(10, 30, 0, 0), MeterWh: 2000}, now); err != nil {
 		t.Fatalf("StopSession: %v", err)
 	}
 	mustCreate(t, s, "CH-1", at(11, 0, 0, 0), 2000)
@@ -130,9 +130,9 @@ func TestCreateSession_SES1_OneActivePerCharger(t *testing.T) {
 func TestCreateSession_SES1_InvalidInputRunsRules(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
-	_, err := s.CreateSession(ctx(), "bad id", at(10, 0, 0, 0), 0, now)
+	_, err := s.CreateSession(ctx(), sessions.SourceAPI, "bad id", at(10, 0, 0, 0), 0, now)
 	requireRule(t, err, sessions.KindInvalid, "invalid_charger_id")
-	_, err = s.CreateSession(ctx(), "CH-1", now.Add(time.Hour), 0, now)
+	_, err = s.CreateSession(ctx(), sessions.SourceAPI, "CH-1", now.Add(time.Hour), 0, now)
 	requireRule(t, err, sessions.KindInvalid, "invalid_reading")
 }
 
@@ -143,7 +143,7 @@ func TestCreateSession_SES1_ConcurrentOneWins(t *testing.T) {
 	const n = 10
 	errs := make([]error, n)
 	race(t, pool, n, func(i int) {
-		_, errs[i] = s.CreateSession(ctx(), "CH-1", at(10, 0, 0, 0), 0, now)
+		_, errs[i] = s.CreateSession(ctx(), sessions.SourceAPI, "CH-1", at(10, 0, 0, 0), 0, now)
 	})
 
 	ok := 0
@@ -165,7 +165,7 @@ func TestAddReading_StoresAndReturnsSorted(t *testing.T) {
 	s := newStore(t)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
 	for _, r := range []billing.Reading{{At: at(10, 10, 0, 0), MeterWh: 2000}, {At: at(10, 5, 0, 0), MeterWh: 1000}} {
-		_, _, dup, err := s.AddReading(ctx(), sess.ID, r, now)
+		_, _, dup, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, r, now)
 		if err != nil || dup {
 			t.Fatalf("AddReading(%v) = %v, %v", r, dup, err)
 		}
@@ -196,11 +196,11 @@ func TestGetSession_ReturnsUTC(t *testing.T) {
 	if sess.StartedAt.Location() != time.UTC {
 		t.Fatalf("created StartedAt zone = %v, want UTC", sess.StartedAt.Location())
 	}
-	if _, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 10}, now); err != nil {
+	if _, _, _, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 10}, now); err != nil {
 		t.Fatal(err)
 	}
 	stopAt := at(10, 20, 0, 0)
-	if _, _, err := s.StopSession(ctx(), sess.ID, billing.Reading{At: stopAt, MeterWh: 20}, now); err != nil {
+	if _, _, err := s.StopSession(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: stopAt, MeterWh: 20}, now); err != nil {
 		t.Fatal(err)
 	}
 	got, readings, err := s.GetSession(ctx(), sess.ID)
@@ -225,10 +225,10 @@ func TestAddReading_DuplicateIsNoop(t *testing.T) {
 	s := store.New(pool)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
 	r := billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}
-	if _, _, dup, err := s.AddReading(ctx(), sess.ID, r, now); err != nil || dup {
+	if _, _, dup, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, r, now); err != nil || dup {
 		t.Fatalf("first = %v, %v", dup, err)
 	}
-	if _, _, dup, err := s.AddReading(ctx(), sess.ID, r, now); err != nil || !dup {
+	if _, _, dup, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, r, now); err != nil || !dup {
 		t.Fatalf("second = %v, %v; want duplicate", dup, err)
 	}
 	if n := countReadings(t, pool, sess.ID); n != 1 {
@@ -244,10 +244,10 @@ func TestAddReading_SubMicrosecondReplayIsDuplicate(t *testing.T) {
 	pool := testdb.New(t)
 	s := store.New(pool)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
-	if _, _, dup, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 10, 0, 123), MeterWh: 700}, now); err != nil || dup {
+	if _, _, dup, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 10, 0, 123), MeterWh: 700}, now); err != nil || dup {
 		t.Fatalf("first = %v, %v", dup, err)
 	}
-	if _, _, dup, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 10, 0, 456), MeterWh: 700}, now); err != nil || !dup {
+	if _, _, dup, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 10, 0, 456), MeterWh: 700}, now); err != nil || !dup {
 		t.Fatalf("second = %v, %v; want duplicate", dup, err)
 	}
 	if n := countReadings(t, pool, sess.ID); n != 1 {
@@ -259,10 +259,10 @@ func TestAddReading_SES2_ConflictingValueAtSameTimestamp(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
-	if _, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}, now); err != nil {
+	if _, _, _, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}, now); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 600}, now)
+	_, _, _, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 600}, now)
 	requireRule(t, err, sessions.KindConflict, "conflicting_reading")
 }
 
@@ -272,10 +272,10 @@ func TestAddReading_UnknownOrMalformedID(t *testing.T) {
 	s := newStore(t)
 	r := billing.Reading{At: at(10, 5, 0, 0), MeterWh: 1}
 	for _, id := range []string{"00000000-0000-4000-8000-000000000000", "nope", ""} {
-		if _, _, _, err := s.AddReading(ctx(), id, r, now); !errors.Is(err, sessions.ErrNotFound) {
+		if _, _, _, err := s.AddReading(ctx(), sessions.SourceAPI, id, r, now); !errors.Is(err, sessions.ErrNotFound) {
 			t.Errorf("AddReading(%q) err = %v, want ErrNotFound", id, err)
 		}
-		if _, _, err := s.StopSession(ctx(), id, r, now); !errors.Is(err, sessions.ErrNotFound) {
+		if _, _, err := s.StopSession(ctx(), sessions.SourceAPI, id, r, now); !errors.Is(err, sessions.ErrNotFound) {
 			t.Errorf("StopSession(%q) err = %v, want ErrNotFound", id, err)
 		}
 		if _, _, err := s.GetSession(ctx(), id); !errors.Is(err, sessions.ErrNotFound) {
@@ -288,11 +288,11 @@ func TestStopSession_SES3(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	sess := mustCreate(t, s, "CH-1", at(10, 0, 0, 0), 0)
-	if _, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}, now); err != nil {
+	if _, _, _, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 500}, now); err != nil {
 		t.Fatal(err)
 	}
 	stop := billing.Reading{At: at(10, 30, 0, 0), MeterWh: 3000}
-	stopped, readings, err := s.StopSession(ctx(), sess.ID, stop, now)
+	stopped, readings, err := s.StopSession(ctx(), sessions.SourceAPI, sess.ID, stop, now)
 	if err != nil {
 		t.Fatalf("StopSession: %v", err)
 	}
@@ -306,10 +306,10 @@ func TestStopSession_SES3(t *testing.T) {
 		t.Fatalf("readings = %v", readings)
 	}
 
-	_, _, _, err = s.AddReading(ctx(), sess.ID, billing.Reading{At: at(10, 40, 0, 0), MeterWh: 4000}, now)
+	_, _, _, err = s.AddReading(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 40, 0, 0), MeterWh: 4000}, now)
 	requireRule(t, err, sessions.KindConflict, "session_stopped")
 
-	replay, rReadings, err := s.StopSession(ctx(), sess.ID, stop, now)
+	replay, rReadings, err := s.StopSession(ctx(), sessions.SourceAPI, sess.ID, stop, now)
 	if err != nil {
 		t.Fatalf("identical stop: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestStopSession_SES3(t *testing.T) {
 		t.Fatalf("replay = %+v %v, want unchanged", replay, rReadings)
 	}
 
-	_, _, err = s.StopSession(ctx(), sess.ID, billing.Reading{At: at(10, 31, 0, 0), MeterWh: 3500}, now)
+	_, _, err = s.StopSession(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 31, 0, 0), MeterWh: 3500}, now)
 	requireRule(t, err, sessions.KindConflict, "stop_conflict")
 }
 
@@ -333,7 +333,7 @@ func TestListRecent_NewestFirstWithLimit(t *testing.T) {
 	c := mustCreate(t, s, "CH-C", at(10, 0, 0, 0), 0)
 	for _, sess := range []sessions.Session{a, b, c} {
 		for _, m := range []int{5, 1} { // inserted out of order on purpose
-			if _, _, _, err := s.AddReading(ctx(), sess.ID, billing.Reading{At: sess.StartedAt.Add(time.Duration(m) * time.Minute), MeterWh: int64(m)}, now); err != nil {
+			if _, _, _, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: sess.StartedAt.Add(time.Duration(m) * time.Minute), MeterWh: int64(m)}, now); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -369,7 +369,7 @@ func TestAddReading_SES6_ConcurrentDuplicates(t *testing.T) {
 	dups := make([]bool, n)
 	errs := make([]error, n)
 	race(t, pool, n, func(i int) {
-		_, _, dups[i], errs[i] = s.AddReading(ctx(), sess.ID, r, now)
+		_, _, dups[i], errs[i] = s.AddReading(ctx(), sessions.SourceAPI, sess.ID, r, now)
 	})
 
 	fresh := 0
@@ -404,9 +404,9 @@ func TestAddReadingVsStop_SES6_Consistent(t *testing.T) {
 	var addErr, stopErr error
 	race(t, pool, 2, func(i int) {
 		if i == 0 {
-			_, _, _, addErr = s.AddReading(ctx(), sess.ID, reading, now)
+			_, _, _, addErr = s.AddReading(ctx(), sessions.SourceAPI, sess.ID, reading, now)
 		} else {
-			_, _, stopErr = s.StopSession(ctx(), sess.ID, stop, now)
+			_, _, stopErr = s.StopSession(ctx(), sessions.SourceAPI, sess.ID, stop, now)
 		}
 	})
 
@@ -470,7 +470,7 @@ func TestAddReading_ReturnsSessionAndReadings(t *testing.T) {
 	r1 := billing.Reading{At: at(10, 10, 0, 0), MeterWh: 2000}
 	r2 := billing.Reading{At: at(10, 5, 0, 0), MeterWh: 1000}
 	for i, r := range []billing.Reading{r1, r2, r2} {
-		got, readings, dup, err := s.AddReading(ctx(), sess.ID, r, now)
+		got, readings, dup, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, r, now)
 		if err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
@@ -481,5 +481,88 @@ func TestAddReading_ReturnsSessionAndReadings(t *testing.T) {
 		if len(readings) != wantLen {
 			t.Fatalf("call %d: %d readings, want %d", i, len(readings), wantLen)
 		}
+	}
+}
+
+// createAs starts a session written by the given source.
+func createAs(t *testing.T, s *store.Store, as sessions.Source, charger string) sessions.Session {
+	t.Helper()
+	sess, err := s.CreateSession(ctx(), as, charger, at(10, 0, 0, 0), 1000, now)
+	if err != nil {
+		t.Fatalf("CreateSession(%s, %s): %v", as, charger, err)
+	}
+	return sess
+}
+
+// MIR-7: the API cannot write to a mirror session, and nothing changes.
+func TestStore_MIR7_APICannotWriteMirrorSession(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	s := store.New(pool)
+	sess := createAs(t, s, sessions.SourceMirror, "CH-M")
+	existing := billing.Reading{At: at(10, 5, 0, 0), MeterWh: 1500}
+	if _, _, _, err := s.AddReading(ctx(), sessions.SourceMirror, sess.ID, existing, now); err != nil {
+		t.Fatalf("mirror AddReading: %v", err)
+	}
+
+	// A new reading, an identical replay of the stored one, and a stop.
+	for _, r := range []billing.Reading{{At: at(10, 10, 0, 0), MeterWh: 1800}, existing} {
+		_, _, _, err := s.AddReading(ctx(), sessions.SourceAPI, sess.ID, r, now)
+		requireRule(t, err, sessions.KindConflict, "mirror_session")
+	}
+	_, _, err := s.StopSession(ctx(), sessions.SourceAPI, sess.ID, billing.Reading{At: at(10, 20, 0, 0), MeterWh: 2000}, now)
+	requireRule(t, err, sessions.KindConflict, "mirror_session")
+
+	got, readings, err := s.GetSession(ctx(), sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.StoppedAt != nil || got.MeterStopWh != nil {
+		t.Errorf("MIR-7: mirror session was stopped by the API: %+v", got)
+	}
+	if len(readings) != 1 || !readings[0].At.Equal(existing.At) || readings[0].MeterWh != existing.MeterWh {
+		t.Errorf("MIR-7: readings = %v, want only %v", readings, existing)
+	}
+}
+
+// MIR-7: the mirror cannot write to an api session either.
+func TestStore_MIR7_MirrorCannotWriteAPISession(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	sess := createAs(t, s, sessions.SourceAPI, "CH-A")
+	_, _, _, err := s.AddReading(ctx(), sessions.SourceMirror, sess.ID, billing.Reading{At: at(10, 5, 0, 0), MeterWh: 1500}, now)
+	requireRule(t, err, sessions.KindConflict, "api_session")
+	_, _, err = s.StopSession(ctx(), sessions.SourceMirror, sess.ID, billing.Reading{At: at(10, 20, 0, 0), MeterWh: 2000}, now)
+	requireRule(t, err, sessions.KindConflict, "api_session")
+}
+
+// MIR-7: GetSession and ListRecent return the source the session was created with.
+func TestStore_MIR7_SourceRoundTrips(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	api := createAs(t, s, sessions.SourceAPI, "CH-A")
+	mirror := createAs(t, s, sessions.SourceMirror, "CH-M")
+	if api.Source != sessions.SourceAPI || mirror.Source != sessions.SourceMirror {
+		t.Fatalf("MIR-7: created sources = %q, %q", api.Source, mirror.Source)
+	}
+	for _, want := range []sessions.Session{api, mirror} {
+		got, _, err := s.GetSession(ctx(), want.ID)
+		if err != nil {
+			t.Fatalf("GetSession: %v", err)
+		}
+		if got.Source != want.Source {
+			t.Errorf("MIR-7: GetSession source = %q, want %q", got.Source, want.Source)
+		}
+	}
+	list, err := s.ListRecent(ctx(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	have := map[string]sessions.Source{}
+	for _, item := range list {
+		have[item.Session.ID] = item.Session.Source
+	}
+	if have[api.ID] != sessions.SourceAPI || have[mirror.ID] != sessions.SourceMirror {
+		t.Errorf("MIR-7: ListRecent sources = %v", have)
 	}
 }

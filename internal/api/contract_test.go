@@ -148,7 +148,7 @@ func TestContract_ErrorCodesEnumerated(t *testing.T) {
 	want := []string{
 		"bad_json", "unauthorized", "not_found", "invalid_charger_id", "invalid_reading",
 		"session_too_long", "conflicting_reading", "session_stopped", "stop_conflict",
-		"active_session_exists", "internal",
+		"active_session_exists", "mirror_session", "internal",
 	}
 	for _, c := range want {
 		if !have[c] {
@@ -208,7 +208,7 @@ func TestContract_ObjectSchemasAreStrict(t *testing.T) {
 
 const (
 	okID     = "0b9a1f6e-6a39-4d3c-8f0e-1c2d3e4f5a6b"
-	activeJS = `{"id":"` + okID + `","charger_id":"CP-01","status":"charging","started_at":"2026-11-07T10:00:00Z","stopped_at":null,"energy_wh":0,"total_cents":0,"segments":[]}`
+	activeJS = `{"id":"` + okID + `","charger_id":"CP-01","source":"api","status":"charging","started_at":"2026-11-07T10:00:00Z","stopped_at":null,"energy_wh":0,"total_cents":0,"segments":[]}`
 )
 
 func sessionJSON(mutate func(string) string) string { return mutate(activeJS) }
@@ -220,7 +220,7 @@ func TestContract_ValidatesResponses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
-	completed := `{"id":"` + okID + `","charger_id":"CP-01","status":"completed","started_at":"2026-11-07T10:00:00Z","stopped_at":"2026-11-07T11:00:00Z","energy_wh":1000,"total_cents":62,"segments":[{"window":"peak","start":"2026-11-07T10:00:00Z","end":"2026-11-07T11:00:00Z","energy_wh":1000,"rate_cents_per_kwh":62,"cost_cents":62}]}`
+	completed := `{"id":"` + okID + `","charger_id":"CP-01","source":"api","status":"completed","started_at":"2026-11-07T10:00:00Z","stopped_at":"2026-11-07T11:00:00Z","energy_wh":1000,"total_cents":62,"segments":[{"window":"peak","start":"2026-11-07T10:00:00Z","end":"2026-11-07T11:00:00Z","energy_wh":1000,"rate_cents_per_kwh":62,"cost_cents":62}]}`
 	list := func(n int) string {
 		items := make([]string, n)
 		for i := range items {
@@ -243,6 +243,10 @@ func TestContract_ValidatesResponses(t *testing.T) {
 		{"extra session field rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"segments":[]`, `"segments":[],"extra":1`, 1) }), false},
 		{"null segments rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"segments":[]`, `"segments":null`, 1) }), false},
 		{"missing stopped_at rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"stopped_at":null,`, ``, 1) }), false},
+		{"missing source rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"source":"api",`, ``, 1) }), false},
+		{"unknown source rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"source":"api"`, `"source":"other"`, 1) }), false},
+		{"mirror source accepted", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"source":"api"`, `"source":"mirror"`, 1) }), true},
+		{"mirror_session error accepted", "GET", sessPath, 404, `{"error":{"code":"mirror_session","message":"x"}}`, true},
 		{"negative energy_wh rejected", "GET", sessPath, 200, sessionJSON(func(s string) string { return strings.Replace(s, `"energy_wh":0`, `"energy_wh":-1`, 1) }), false},
 		{"unknown error code rejected", "GET", sessPath, 404, `{"error":{"code":"nope","message":"x"}}`, false},
 		{"list of 51 rejected", "GET", "/api/sessions", 200, list(51), false},
