@@ -172,14 +172,15 @@ jobs:
       TRIVY_SKIP_VERSION_CHECK: "true"
     steps:
       - uses: actions/checkout@v7
-      # The cache key covers both modules: the service's (scanned below) and
-      # Trivy's (built below).
+      # The cache holds Trivy's modules and build output, about 1.5 GB, so its
+      # key comes from Trivy's go.sum only: a new entry is saved when Trivy
+      # changes, not whenever the service's dependencies do (the repository's
+      # cache limit is 10 GB). The service's modules, fetched by `go mod
+      # download` below, are small.
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-          cache-dependency-path: |
-            go.sum
-            tools/trivy/go.sum
+          cache-dependency-path: tools/trivy/go.sum
       # Trivy is pinned in its own module, tools/trivy/go.mod, which Dependabot
       # updates; in the root go.mod its large dependency tree would join the
       # service's module graph. It is built from source through the Go module
