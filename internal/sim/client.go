@@ -17,6 +17,15 @@ import (
 // free-tier cold start.
 const DefaultTimeout = 90 * time.Second
 
+// idleConnTimeout is below the server's 60 s IdleTimeout
+// (internal/server/serve.go), so the client drops an idle kept-alive
+// connection before the server can close it under the next request.
+const idleConnTimeout = 30 * time.Second
+
+// retryDelay is the pause before resending a reading or stop that got no
+// response at all.
+const retryDelay = 500 * time.Millisecond
+
 // Client posts to the billing API's write endpoints.
 type Client struct {
 	BaseURL, APIKey string
@@ -32,9 +41,15 @@ func (c *Client) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// NewClient returns a Client with the default 90 s timeout.
+// NewClient returns a Client with the default 90 s timeout and its own
+// transport, whose idle connections close before the server's do.
 func NewClient(baseURL, apiKey string) *Client {
-	return &Client{BaseURL: baseURL, APIKey: apiKey, HTTP: &http.Client{Timeout: DefaultTimeout}}
+	tr := &http.Transport{} // only if a program replaced http.DefaultTransport
+	if def, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = def.Clone()
+	}
+	tr.IdleConnTimeout = idleConnTimeout
+	return &Client{BaseURL: baseURL, APIKey: apiKey, HTTP: &http.Client{Timeout: DefaultTimeout, Transport: tr}}
 }
 
 // APIError is a non-2xx answer from the API. Code is the Error body's
@@ -63,7 +78,7 @@ func (c *Client) Start(ctx context.Context, chargerID string, startedAt time.Tim
 		"charger_id":     chargerID,
 		"started_at":     ts(startedAt),
 		"meter_start_wh": meterStartWh,
-	}, &out)
+	}, &out, false)
 	if err != nil {
 		return "", err
 	}
@@ -74,32 +89,55 @@ func (c *Client) Start(ctx context.Context, chargerID string, startedAt time.Tim
 }
 
 // MeterValue records a reading (SES-2). The API answers 200 for a duplicate,
-// which is success.
+// which is success, so a reading that got no response is resent once.
 func (c *Client) MeterValue(ctx context.Context, id string, at time.Time, meterWh int64) error {
 	return c.post(ctx, "/api/sessions/"+url.PathEscape(id)+"/meter-values", map[string]any{
 		"timestamp": ts(at),
 		"meter_wh":  meterWh,
-	}, nil)
+	}, nil, true)
 }
 
-// Stop ends the session (SES-3).
+// Stop ends the session (SES-3). Replaying an identical stop returns the
+// original result, so a stop that got no response is resent once.
 func (c *Client) Stop(ctx context.Context, id string, at time.Time, meterStopWh int64) error {
 	return c.post(ctx, "/api/sessions/"+url.PathEscape(id)+"/stop", map[string]any{
 		"stopped_at":    ts(at),
 		"meter_stop_wh": meterStopWh,
-	}, nil)
+	}, nil, true)
 }
 
 // post sends body as JSON with the API key. On success it decodes the reply
 // into out when out is not nil. Errors never include the key.
-func (c *Client) post(ctx context.Context, path string, body, out any) (err error) {
+//
+// When resendable is true and the request got no response at all (for example
+// the server closed the connection under it), post waits retryDelay and sends
+// it once more. It never resends after the server answered, whatever the
+// status, nor once ctx is done.
+func (c *Client) post(ctx context.Context, path string, body, out any, resendable bool) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)
 	}
+	responded, err := c.send(ctx, path, raw, out)
+	if err == nil || responded || !resendable || ctx.Err() != nil {
+		return err
+	}
+	c.logger().Warn("no response, resending once", "path", path, "error", err)
+	if serr := sleep(ctx, retryDelay); serr != nil {
+		return errors.Join(err, serr)
+	}
+	if _, rerr := c.send(ctx, path, raw, out); rerr != nil {
+		return fmt.Errorf("resend: %w", rerr)
+	}
+	return nil
+}
+
+// send makes one POST of raw. responded reports whether the server answered
+// with a status, so the caller knows whether a resend is safe to consider.
+func (c *Client) send(ctx context.Context, path string, raw []byte, out any) (responded bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("build request for %s: %w", path, err)
+		return false, fmt.Errorf("build request for %s: %w", path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", c.APIKey)
@@ -107,7 +145,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) (err erro
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		// url.Error carries the URL and cause, not request headers.
-		return fmt.Errorf("POST %s: %w", path, err)
+		return false, fmt.Errorf("POST %s: %w", path, err)
 	}
 	defer func() {
 		if cerr := resp.Body.Close(); cerr != nil && err == nil {
@@ -117,7 +155,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) (err erro
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("POST %s: read response: %w", path, err)
+		return true, fmt.Errorf("POST %s: read response: %w", path, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		ae := &APIError{Status: resp.StatusCode}
@@ -129,12 +167,12 @@ func (c *Client) post(ctx context.Context, path string, body, out any) (err erro
 		if json.Unmarshal(data, &eb) == nil {
 			ae.Code = eb.Error.Code
 		}
-		return fmt.Errorf("POST %s: %w", path, ae)
+		return true, fmt.Errorf("POST %s: %w", path, ae)
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("POST %s: decode response: %w", path, err)
+			return true, fmt.Errorf("POST %s: decode response: %w", path, err)
 		}
 	}
-	return nil
+	return true, nil
 }
