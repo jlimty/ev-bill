@@ -23,7 +23,7 @@
 </div>
 </main>
 <footer>
-<p>Times are shown in {{.TZ}}.{{if .Stream}} This page updates live.{{end}}</p>
+<p>Times are shown in {{.TZ}}.{{if .Stream}} {{.Freshness}}{{end}}</p>
 <p>Charger data: LTA DataMall EV Charging Points.</p>
 </footer>
 </body>

@@ -202,120 +202,6 @@ func TestStore_LOC5_EmptyScope(t *testing.T) {
 	}
 }
 
-// LOC-6: billing sessions, energy and value per site. Energy is the stop meter,
-// else the highest reading, else the start meter, minus the start meter. Value
-// is round-half-up(Wh × price ÷ 100,000) per session at the charger's current
-// price. API sessions and sessions started before since are left out.
-func TestStore_LOC6_EnergyAndValue(t *testing.T) {
-	t.Parallel()
-	s := newStore(t)
-	applyObservation(t, s, []store.ChargerRow{
-		siteCharger("SG-A", "100001", "Mall A", "Testco", "0.6976", "kWh", locObs),
-		siteCharger("SG-B", "100002", "Mall B", "Testco", "0.70", "kWh", locObs),
-		siteCharger("SG-C", "100002", "Mall B", "Testco", "0.70", "kWh", locObs),
-	}, []store.OccupancySample{ // both sites watched from since onwards
-		sample("100001", locSince, 1, 1, 0),
-		sample("100002", locSince, 1, 1, 0),
-	})
-
-	// Before since: left out.
-	early := locSession(t, s, sessions.SourceMirror, "SG-A", locSince.Add(-2*time.Hour), 0)
-	locStop(t, s, sessions.SourceMirror, early, locSince.Add(-time.Hour), 5_000)
-	// Started exactly at since, so inside. Stopped, 0 -> 1,000 Wh at
-	// 69.76 c/kWh: 69.76 c rounds to 70 c.
-	stopped := locSession(t, s, sessions.SourceMirror, "SG-A", locSince, 0)
-	locReading(t, s, sessions.SourceMirror, stopped, locSince.Add(90*time.Minute), 400)
-	locStop(t, s, sessions.SourceMirror, stopped, locSince.Add(2*time.Hour), 1_000)
-	// API session on SG-B: left out.
-	api := locSession(t, s, sessions.SourceAPI, "SG-B", locSince.Add(time.Hour), 0)
-	locStop(t, s, sessions.SourceAPI, api, locSince.Add(2*time.Hour), 9_999)
-	// Open, last reading 500 Wh at 70 c/kWh: 35 c.
-	open := locSession(t, s, sessions.SourceMirror, "SG-B", locSince.Add(3*time.Hour), 0)
-	locReading(t, s, sessions.SourceMirror, open, locSince.Add(3*time.Hour+5*time.Minute), 200)
-	locReading(t, s, sessions.SourceMirror, open, locSince.Add(3*time.Hour+10*time.Minute), 500)
-	// Open with no readings and a non-zero start: 0 Wh, 0 c.
-	locSession(t, s, sessions.SourceMirror, "SG-C", locSince.Add(4*time.Hour), 300)
-
-	got := listLocations(t, s)
-	if len(got) != 2 {
-		t.Fatalf("Locations = %+v, want two sites", got)
-	}
-	a, b := got[0], got[1]
-	if a.PostalCode != "100001" || a.Sessions != 1 || a.EnergyWh != 1_000 || a.ValueCents != 70 || a.PriceNASessions != 0 {
-		t.Errorf("site A = %s: %d sessions, %d Wh, %d c, %d n/a; want 100001: 1, 1000, 70, 0",
-			a.PostalCode, a.Sessions, a.EnergyWh, a.ValueCents, a.PriceNASessions)
-	}
-	if b.PostalCode != "100002" || b.Sessions != 2 || b.EnergyWh != 500 || b.ValueCents != 35 || b.PriceNASessions != 0 {
-		t.Errorf("site B = %s: %d sessions, %d Wh, %d c, %d n/a; want 100002: 2, 500, 35, 0",
-			b.PostalCode, b.Sessions, b.EnergyWh, b.ValueCents, b.PriceNASessions)
-	}
-}
-
-// LOC-6: a session on a charger whose price is unknown counts as a billing
-// session and in the energy, but not in the value, and is noted as price n/a.
-// A free charger's session is valued at 0 and is not n/a.
-func TestStore_LOC6_PriceNACounted(t *testing.T) {
-	t.Parallel()
-	s := newStore(t)
-	applyObservation(t, s, []store.ChargerRow{
-		siteCharger("SG-1", "100001", "Mall", "Testco", "0.50", "", locObs),
-		siteCharger("SG-2", "100001", "Mall", "Testco", "", "free", locObs),
-	}, []store.OccupancySample{sample("100001", locSince, 1, 1, 0)})
-	na := locSession(t, s, sessions.SourceMirror, "SG-1", locSince.Add(time.Hour), 0)
-	locStop(t, s, sessions.SourceMirror, na, locSince.Add(2*time.Hour), 800)
-	free := locSession(t, s, sessions.SourceMirror, "SG-2", locSince.Add(time.Hour), 100)
-	locStop(t, s, sessions.SourceMirror, free, locSince.Add(2*time.Hour), 300)
-
-	a := onlySite(t, listLocations(t, s), "100001")
-	if a.Sessions != 2 || a.EnergyWh != 1_000 || a.ValueCents != 0 || a.PriceNASessions != 1 {
-		t.Errorf("site = %d sessions, %d Wh, %d c, %d n/a; want 2, 1000, 0, 1",
-			a.Sessions, a.EnergyWh, a.ValueCents, a.PriceNASessions)
-	}
-}
-
-// LOC-6 "over the same window", LOC-2: a site's sessions cover the same window
-// as its utilization, which starts at its first sample when that is later than
-// since. A session started before the first sample is left out, one started at
-// exactly the first sample counts, and a site with no sample has no sessions,
-// energy or value.
-func TestStore_LOC6_SessionsInSiteWindow(t *testing.T) {
-	t.Parallel()
-	s := newStore(t)
-	first := locSince.Add(2 * time.Hour)
-	applyObservation(t, s, []store.ChargerRow{
-		siteCharger("SG-A1", "100001", "Watched", "Testco", "0.50", "kWh", locObs),
-		siteCharger("SG-A2", "100001", "Watched", "Testco", "0.50", "kWh", locObs),
-		siteCharger("SG-A3", "100001", "Watched", "Testco", "0.50", "kWh", locObs),
-		siteCharger("SG-B1", "100002", "Unwatched", "Testco", "0.50", "kWh", locObs),
-	}, []store.OccupancySample{sample("100001", first, 1, 1, 0)})
-
-	before := locSession(t, s, sessions.SourceMirror, "SG-A1", first.Add(-time.Minute), 0)
-	locStop(t, s, sessions.SourceMirror, before, first.Add(time.Hour), 4_000)
-	atFirst := locSession(t, s, sessions.SourceMirror, "SG-A2", first, 0)
-	locStop(t, s, sessions.SourceMirror, atFirst, first.Add(time.Hour), 1_000) // 50 c
-	after := locSession(t, s, sessions.SourceMirror, "SG-A3", first.Add(time.Hour), 0)
-	locStop(t, s, sessions.SourceMirror, after, first.Add(2*time.Hour), 600) // 30 c
-	unwatched := locSession(t, s, sessions.SourceMirror, "SG-B1", first, 0)
-	locStop(t, s, sessions.SourceMirror, unwatched, first.Add(time.Hour), 2_000)
-
-	got := listLocations(t, s)
-	if len(got) != 2 {
-		t.Fatalf("Locations = %+v, want two sites", got)
-	}
-	a, b := got[0], got[1]
-	if !a.FirstSample.Equal(first) {
-		t.Fatalf("FirstSample = %v, want %v", a.FirstSample, first)
-	}
-	if a.Sessions != 2 || a.EnergyWh != 1_600 || a.ValueCents != 80 || a.PriceNASessions != 0 {
-		t.Errorf("watched site = %d sessions, %d Wh, %d c, %d n/a; want 2, 1600, 80, 0 (the session before the first sample left out)",
-			a.Sessions, a.EnergyWh, a.ValueCents, a.PriceNASessions)
-	}
-	if b.Samples != 0 || b.Sessions != 0 || b.EnergyWh != 0 || b.ValueCents != 0 || b.PriceNASessions != 0 {
-		t.Errorf("site with no sample = %d samples, %d sessions, %d Wh, %d c, %d n/a; want all 0",
-			b.Samples, b.Sessions, b.EnergyWh, b.ValueCents, b.PriceNASessions)
-	}
-}
-
 // LOC-5: chargers sort by charger_id in byte order, as Go compares strings,
 // whatever the database's collation, so the cell order agrees with Go. In byte order "-" (0x2D)
 // comes before "1" (0x31); en_US.UTF-8 under glibc ignores the hyphen and
@@ -423,7 +309,6 @@ func TestStore_LOC_LocationsFailures(t *testing.T) {
 	for _, tc := range []struct{ name, drop string }{
 		{"cancelled context", ""},
 		{"no samples table", "occupancy_samples"},
-		{"no readings table", "meter_readings"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

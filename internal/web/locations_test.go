@@ -146,12 +146,14 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 	e.observe([]store.ChargerRow{locCharger("D-001", "100004", "Delta Point", "Testco", datamall.Unavailable)},
 		samplesBack("100004", 300, 0, 0, 2))
 
-	e.mirrorStopped("A-001", sgt(22, 0, 6), sgt(22, 30, 6), 2500) // 2500 Wh x 0.6976 = 174.4 -> 174 cents
-	e.mirrorStopped("A-001", sgt(23, 0, 6), sgt(23, 30, 6), 1000) // 1000 Wh x 0.6976 = 69.76 -> 70 cents
-	e.mirrorStopped("A-002", sgt(21, 0, 6), sgt(21, 30, 6), 500)  // price n/a
-	e.mirrorStopped("C-001", sgt(19, 20, 6), sgt(19, 30, 6), 300) // price n/a; at Charlie's first sample, 19:20
-	e.mirrorStopped("C-001", sgt(19, 0, 6), sgt(19, 10, 6), 900)  // before Charlie's first sample: left out (LOC-6)
-	e.mirrorStopped("C-001", sgt(20, 0, 6), sgt(20, 30, 6), 700)  // price n/a
+	// LOC-6: every session counts at our 62/48 tariff, whatever the posted
+	// price, and none is left out for starting before the site's first sample.
+	e.mirrorStopped("A-001", sgt(22, 0, 6), sgt(22, 30, 6), 2500) // peak: 2500 Wh x 62 = 155 c
+	e.mirrorStopped("A-001", sgt(23, 0, 6), sgt(23, 30, 6), 1000) // off-peak: 1000 Wh x 48 = 48 c
+	e.mirrorStopped("A-002", sgt(21, 0, 6), sgt(21, 30, 6), 500)  // peak: 31 c
+	e.mirrorStopped("C-001", sgt(19, 20, 6), sgt(19, 30, 6), 300) // peak: 18.6 -> 19 c
+	e.mirrorStopped("C-001", sgt(19, 0, 6), sgt(19, 10, 6), 900)  // before Charlie's first sample, 19:20: counts; 55.8 -> 56 c
+	e.mirrorStopped("C-001", sgt(20, 0, 6), sgt(20, 30, 6), 700)  // peak: 43.4 -> 43 c
 
 	body := e.get("/").Body.String()
 	// The earliest sample is Bravo's, 400 x 5 min = 33 h 20 min before 00:20
@@ -174,23 +176,32 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 	}
 
 	a := card(t, body, "Alpha Mall")
+	// LOC-8: Alpha's first sample is 300 x 5 min before 00:20 on 7 Nov, 23:20
+	// on 5 Nov, earlier than its first session.
 	wantContains(t, a, `<p class="sub">Otherco, Testco · 2 connectors</p>`,
+		`<p class="sub observing">Observing since 5 Nov, 23:20</p>`,
 		`<span class="pct" data-watch>25%</span><span class="vh">&nbsp;·&nbsp;</span><span class="label">25 h avg · observed</span>`,
-		`<p class="facts">3 billing sessions · est. 4.0 kWh · price n/a for 1 session · est. $2.44 at posted prices</p>`)
+		`<p class="facts">3 billing sessions · 4.0 kWh est. · $2.34 est.</p>`)
 	if strings.Contains(a, "collecting data") {
 		t.Errorf("LOC-4: sufficient site has a collecting note: %s", a)
 	}
 
 	b := card(t, body, "Bravo Hub")
 	wantContains(t, b, `<p class="sub">Testco · 1 connector</p>`, `<span class="pct" data-watch>10%</span>`,
-		`<p class="facts">0 billing sessions · est. 0.0 kWh · est. $0.00 at posted prices</p>`)
-	if strings.Contains(b, "price n/a") {
-		t.Errorf("LOC-6: no price n/a note expected with no sessions: %s", b)
-	}
+		`<p class="facts">0 billing sessions · 0.0 kWh est. · $0.00 est.</p>`)
 
 	c := card(t, body, "Charlie Park")
-	wantContains(t, c, `<span class="pct" data-watch>50%</span>`, `<p class="note">collecting data · 5 h</p>`,
-		`<p class="facts">2 billing sessions · est. 1.0 kWh · price n/a for 2 sessions · est. $0.00 at posted prices</p>`)
+	// LOC-8: Charlie's first session, 19:00, is earlier than its first sample.
+	wantContains(t, c, `<p class="sub">Testco · 1 connector</p>`,
+		`<p class="sub observing">Observing since 6 Nov, 19:00</p>`,
+		`<span class="pct" data-watch>50%</span>`, `<p class="note">collecting data · 5 h</p>`,
+		`<p class="facts">3 billing sessions · 1.9 kWh est. · $1.18 est.</p>`)
+	// LOC-6, NAV-2: the posted price is shown only in the drill-down's
+	// column, never on the Locations page.
+	main := body[strings.Index(body, "<main"):strings.Index(body, "</main>")]
+	if strings.Contains(main, "posted") || strings.Contains(main, "price n/a") {
+		t.Errorf("LOC-6: the Locations page shows a posted price: %s", main)
+	}
 
 	d := card(t, body, "Delta Point")
 	wantContains(t, d, `<span class="pct" data-watch>n/a</span>`)
@@ -241,13 +252,14 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 	t.Run("no samples yet", func(t *testing.T) {
 		e := newEnv(t)
 		e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, nil)
-		// LOC-6: with no sample the site has no window yet, so this session
-		// is not counted next to "0 h".
+		// LOC-6, LOC-8: with no sample yet the site's session still counts, as
+		// its drill-down lists it, and observation dates from that session.
 		e.mirrorStopped("A-001", sgt(22, 0, 6), sgt(22, 30, 6), 2500)
 		body := e.get("/").Body.String()
 		wantContains(t, body, `<p class="headline">Collecting data · 0 h observed so far</p>`,
 			`<span class="pct" data-watch>n/a</span>`, `<p class="note">collecting data · 0 h</p>`,
-			`<p class="facts">0 billing sessions · est. 0.0 kWh · est. $0.00 at posted prices</p>`)
+			`<p class="sub observing">Observing since 6 Nov, 22:00</p>`,
+			`<p class="facts">1 billing session · 2.5 kWh est. · $1.55 est.</p>`)
 		if strings.Contains(body, `class="window"`) {
 			t.Errorf("LOC-4: a window line with no sample to date it: %s", body)
 		}
@@ -485,14 +497,18 @@ func TestLocations_LOC7_LegendAndNotice(t *testing.T) {
 		`<li><span class="cell busy muted"></span>last known, feed not live</li>`,
 		template.HTMLEscapeString(locationsNotice(e.p.Tariff)),
 	)
-	wantContains(t, locationsNotice(e.p.Tariff), "estimate", "50 kW", "posted price", "operator's price, not the 62/48 billing tariff")
+	n := locationsNotice(e.p.Tariff)
+	wantContains(t, n, "estimate", "50 kW", "cost is that estimate at our 62/48 tariff")
+	if strings.Contains(n, "posted price") {
+		t.Errorf("LOC-6: the notice still explains a posted-price value: %s", n)
+	}
 	wantContains(t, body, `<p class="notice">`)
 }
 
 // VIEW-5, UI-4: the labels name their time bases. The window line states the
 // observed hours, so a card whose hours match shows its percentage alone (the
 // label shows when they differ: TestLocations_LOC2_UtilReadsAsWords); the count is "Now: ..." and, muted, "As of 13:20: ..."; the
-// facts line says whose price the value uses; the card links to the site's
+// facts line names the tariff its cost uses; the card links to the site's
 // sessions; and a second name at the postal code is "also {name}".
 func TestLocations_VIEW5_Labels(t *testing.T) {
 	e := newEnv(t)
@@ -511,7 +527,7 @@ func TestLocations_VIEW5_Labels(t *testing.T) {
 	wantContains(t, body, ` · 31 h observed</p>`)
 	wantContains(t, c,
 		`<p class="count" data-watch>Now: 2 busy · 1 free</p>`,
-		`est. $0.70 at posted prices</p>`,
+		`$0.62 est.</p>`,
 		`<a class="all" href="/sessions?site=100001">All sessions at this site →</a>`,
 		`also Alpha Mall Level 2`)
 

@@ -218,6 +218,31 @@ func TestDetailPage_UnknownIs404(t *testing.T) {
 	}
 }
 
+// LIVE-4: the footer says how fresh charger data is, not that it is "live":
+// we fetch LTA's status every 5 min and LTA republishes it every 5 min, so it
+// can be up to 10 min old; what is live is the page redrawing itself. A page
+// that does not stream (a completed session, an error page) says neither.
+func TestFooter_LIVE4_Freshness(t *testing.T) {
+	e := newEnv(t)
+	done := e.mockup("CP-01")
+	const want = "<p>Times are shown in Singapore time. Charger status is fetched from LTA every 5 minutes, " +
+		"so it can be up to 10 minutes old; this page refreshes itself when it changes.</p>"
+	for _, path := range []string{"/", "/sessions"} {
+		body := e.get(path).Body.String()
+		wantContains(t, body, want)
+		if strings.Contains(body, "updates live") {
+			t.Errorf("LIVE-4: %s footer still says the page updates live", path)
+		}
+	}
+	for _, path := range []string{"/sessions/" + done, "/sessions/not-a-uuid"} {
+		body := e.get(path).Body.String()
+		wantContains(t, body, "<p>Times are shown in Singapore time.</p>")
+		if strings.Contains(body, "refreshes itself") {
+			t.Errorf("LIVE-4: %s does not stream but its footer says it refreshes", path)
+		}
+	}
+}
+
 // UI-1, UI-2: a store failure is a generic 500 page; the cause is logged, never shown.
 func TestPages_StoreFailureIs500(t *testing.T) {
 	e := newEnv(t)
@@ -852,9 +877,9 @@ func TestList_NAV2_Site(t *testing.T) {
 	body := rec.Body.String()
 	// NAV-2, UI-5: the h1 names the site, with no link to every site: the
 	// visitor came from that site's card and goes back through Locations.
-	wantContains(t, body, "<h1>Sessions at MARINA SQUARE</h1>\n<p class=\"notice\">",
+	wantContains(t, body, "<h1>Sessions at MARINA SQUARE</h1>\n<p class=\"sub observing\">Observing since 7 Nov, 00:00</p>\n<p class=\"notice\">",
 		"<title>Sessions at MARINA SQUARE · EV billing</title>",
-		`<caption class="vh">Sessions at MARINA SQUARE</caption>`, "1 on this page · 1 in all",
+		`<caption class="vh">Sessions at MARINA SQUARE</caption>`, "1 session in all · ",
 		`<body data-stream="view=list&amp;site=038983">`)
 	if sessionRows(body) != 1 || strings.Contains(body, "ELSE-1") || strings.Contains(body, `class="source simulated"`) {
 		t.Errorf("NAV-2: site filter shows other sessions: %s", body)
@@ -885,6 +910,100 @@ func TestList_NAV2_Site(t *testing.T) {
 
 	e.siteCharger("EMPTY-1", "222222", "QUIET PLACE")
 	wantContains(t, e.get("/sessions?site=222222").Body.String(), "No sessions at this site yet.")
+}
+
+// siteFigures returns the "N … · X kWh est. · $Y est." figures of a totals
+// line, dropping its noun, so a card and a drill-down can be compared.
+var siteFiguresRE = regexp.MustCompile(`(\d+) (?:billing )?sessions?(?: in all)? · ([\d.,]+ kWh est\.) · (\$[\d.,]+ est\.)`)
+
+func siteFigures(t *testing.T, body string) string {
+	t.Helper()
+	m := siteFiguresRE.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("no site totals in %s", body)
+	}
+	return strings.Join(m[1:], " | ")
+}
+
+// NAV-2, LOC-6: a site's drill-down states the same sessions, energy and cost
+// as its Locations card, both billed at our tariff at the same now, including
+// an open session. One page needs no "on this page".
+func TestList_NAV2_SiteTotalsMatchCard(t *testing.T) {
+	e := newEnv(t)
+	e.siteCharger("SITE-1", "038983", "MARINA SQUARE")
+	e.siteCharger("SITE-2", "038983", "MARINA SQUARE")
+	e.mirrorStopped("SITE-1", sgt(22, 0, 6), sgt(22, 30, 6), 1000) // peak: 62 c
+	e.mirrorSession("SITE-2", sgt(0, 0, 7), sgt(0, 10, 7), 1233)   // open, off-peak: 59.18 -> 59 c
+
+	cardBody := card(t, e.get("/").Body.String(), "MARINA SQUARE")
+	list := e.get("/sessions?site=038983").Body.String()
+	wantContains(t, cardBody, `<p class="facts">2 billing sessions · 2.2 kWh est. · $1.21 est.</p>`)
+	wantContains(t, list, `<p class="tally">2 sessions in all · 2.2 kWh est. · $1.21 est. at our 62/48 tariff</p>`)
+	if c, l := siteFigures(t, cardBody), siteFigures(t, list); c != l {
+		t.Errorf("NAV-2: card figures %q differ from the drill-down's %q", c, l)
+	}
+	if strings.Contains(list, "on this page") {
+		t.Errorf("NAV-2: a one-page site says \"on this page\": %s", list)
+	}
+}
+
+// NAV-2: the site totals cover every page, not just the 50 rows shown; the
+// count line then says how many are on this page, and the footer still
+// totals the page. All 51 sessions are peak: 100 Wh x 62 = 6.2 -> 6 c each.
+func TestList_NAV2_SiteTotalsAcrossPages(t *testing.T) {
+	e := newEnv(t)
+	e.siteCharger("SITE-1", "038983", "MARINA SQUARE")
+	for i := range sessions.ListLimit + 1 {
+		start := sgt(7, 0, 6).Add(time.Duration(i) * 15 * time.Minute)
+		e.mirrorStopped("SITE-1", start, start.Add(10*time.Minute), 100)
+	}
+	list := e.get("/sessions?site=038983").Body.String()
+	wantContains(t, list,
+		`<p class="tally">51 sessions in all · 5.1 kWh est. · $3.06 est. at our 62/48 tariff · 50 on this page</p>`,
+		"Total, these 50 sessions")
+	if c, l := siteFigures(t, card(t, e.get("/").Body.String(), "MARINA SQUARE")), siteFigures(t, list); c != l {
+		t.Errorf("NAV-2: card figures %q differ from the drill-down's %q", c, l)
+	}
+}
+
+// NAV-2: on a site's drill-down, each row's charger line ends with that
+// charger's posted price today, a fact about the charger beside its kW, not a
+// column next to our cost. The table keeps its five columns, and the
+// unfiltered list's charger lines carry no price.
+func TestList_NAV2_PostedPriceInChargerLine(t *testing.T) {
+	e := newEnv(t)
+	dc := locCharger("SITE-DC", "038983", "MARINA SQUARE", "Testco", datamall.Occupied) // 0.6976 per kWh
+	ac := locCharger("SITE-AC", "038983", "MARINA SQUARE", "Testco", datamall.Occupied)
+	ac.Price, ac.PriceType = "0.50", "$/h"
+	e.observe([]store.ChargerRow{dc, ac}, nil)
+	dcID := e.mirrorSession("SITE-DC", sgt(0, 0, 7), sgt(0, 10, 7), 1000)
+	acID := e.mirrorSession("SITE-AC", sgt(0, 0, 7), sgt(0, 10, 7), 500)
+
+	list := e.get("/sessions?site=038983").Body.String()
+	wantContains(t, rowOf(t, list, dcID), `<div class="sub">MARINA SQUARE · Testco · 22 kW AC · posted $0.6976/kWh</div>`)
+	wantContains(t, rowOf(t, list, acID), `<div class="sub">MARINA SQUARE · Testco · 22 kW AC · posted price n/a</div>`)
+	if strings.Contains(list, "Posted price") || strings.Contains(list, `class="num price"`) {
+		t.Errorf("NAV-2: the drill-down still has a posted price column: %s", list)
+	}
+	all := e.get("/sessions").Body.String()
+	wantContains(t, rowOf(t, all, dcID), `<div class="sub">MARINA SQUARE · Testco · 22 kW AC</div>`)
+	if strings.Contains(all, "posted") {
+		t.Errorf("NAV-2: the unfiltered list shows a posted price")
+	}
+}
+
+// LOC-8: the site drill-down says when observation began, as the card does;
+// the unfiltered list has no such line.
+func TestList_LOC8_ObservingOnSite(t *testing.T) {
+	e := newEnv(t)
+	e.siteCharger("SITE-1", "038983", "MARINA SQUARE")
+	e.mirrorStopped("SITE-1", sgt(22, 0, 6), sgt(22, 30, 6), 1000)
+	const want = `<p class="sub observing">Observing since 6 Nov, 22:00</p>`
+	wantContains(t, card(t, e.get("/").Body.String(), "MARINA SQUARE"), want)
+	wantContains(t, e.get("/sessions?site=038983").Body.String(), "<h1>Sessions at MARINA SQUARE</h1>\n"+want)
+	if strings.Contains(e.get("/sessions").Body.String(), "observing") {
+		t.Error("LOC-8: the unfiltered list has an observing line")
+	}
 }
 
 // NAV-2: a failure to look up the site's name is a generic 500 page.
@@ -969,7 +1088,7 @@ func TestList_NAV3_SortLinks(t *testing.T) {
 	wantContains(t, body,
 		`<th scope="col" aria-sort="descending"><a href="/sessions?dir=asc" data-key="sort-started">Started <span aria-hidden="true">↓</span></a></th>`,
 		`<th scope="col" class="num"><a href="/sessions?sort=energy" data-key="sort-energy">Energy</a></th>`,
-		`<th scope="col" class="num">Cost (62/48 tariff)</th>`)
+		`<th scope="col" class="num">Cost (our 62/48 tariff)</th>`)
 
 	body = e.get("/sessions?sort=energy&dir=asc").Body.String()
 	wantContains(t, body,
@@ -1015,7 +1134,7 @@ func TestList_VIEW1_VIEW2_Labels(t *testing.T) {
 	if strings.Contains(apiRow, "est.") || strings.Contains(apiRow, "occupied") {
 		t.Errorf("VIEW-1/2: simulated row has est. or occupied: %s", apiRow)
 	}
-	wantContains(t, body, ">Charger</th>", ">Started <span", ">Status</th>", ">Energy</a></th>", ">Cost (62/48 tariff)</th>",
+	wantContains(t, body, ">Charger</th>", ">Started <span", ">Status</th>", ">Energy</a></th>", ">Cost (our 62/48 tariff)</th>",
 		listNoticeHTML, `<th scope="row" colspan="3">Total, these 2 sessions</th><td class="num" data-watch>2.2 kWh est.</td><td class="num" data-watch>$1.07 est.</td>`)
 
 	// The API still reports the stored status (VIEW-2).
@@ -1047,7 +1166,7 @@ func TestList_VIEW1_VIEW2_Labels(t *testing.T) {
 		t.Errorf("VIEW-1: tariffName = %q, want 55/40", got)
 	}
 	e.p.Tariff = custom
-	wantContains(t, e.get("/sessions").Body.String(), ">Cost (55/40 tariff)</th>")
+	wantContains(t, e.get("/sessions").Body.String(), ">Cost (our 55/40 tariff)</th>")
 }
 
 // sessionRows counts the list's session rows: keyed rows other than the totals.

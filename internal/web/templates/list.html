@@ -1,5 +1,6 @@
 {{define "content"}}
 <h1>{{.Heading}}</h1>
-<p class="notice">{{.Notice}}</p>
+{{with .Observing}}<p class="sub observing">{{.}}</p>
+{{end}}<p class="notice">{{.Notice}}</p>
 <div class="card" data-live="list">{{template "list_body" .}}</div>
 {{end}}

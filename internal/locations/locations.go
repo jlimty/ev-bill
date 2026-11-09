@@ -1,5 +1,5 @@
 // Package locations holds the pure, integer-only maths behind the Locations
-// page: utilization, price parsing, estimated value, observed time, site
+// page: utilization, posted-price parsing, observed time, site
 // ordering and the headline sentence (LOC-2, LOC-4, LOC-6). It has no I/O and
 // uses no floating point.
 package locations
@@ -77,13 +77,6 @@ func ParsePrice(price, priceType string) (perKWh int64, ok bool) {
 		return 0, false
 	}
 	return v, true
-}
-
-// ValueCents is round-half-up(wh × perKWh ÷ 100,000) cents (LOC-6). Both
-// inputs must be non-negative.
-func ValueCents(wh, perKWh int64) int64 {
-	const d = 100_000
-	return (2*wh*perKWh + d) / (2 * d)
 }
 
 // ObservedHours is the observed time for a sample count, in whole hours

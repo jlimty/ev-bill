@@ -53,7 +53,8 @@ This work makes Locations the home page and Sessions its drill-down, and fixes t
   - **Malformed `site`** (not `^[0-9]{6}$`): 400, with the error page "Postal codes have 6 digits." and a link "Show all sessions". The value is not echoed.
   - **Well-formed but absent from `chargers`:** 404, with "No watched site has postal code {postal}." and a link "Show all sessions".
   - **Heading:** "Sessions at {site name} · Show all sites" (UI-5 in the original spec: the "Show all sites" link goes). The site name comes from VIEW-5's naming rule, applied to that postal code's rows in its newest observation.
-  - **Link from Locations:** each card gets a link "All sessions at this site →" to `/sessions?site=<postal>`, next to the facts line. The card's "N billing sessions" (LOC-6) stays as it is: a count over the observation window and current scope. The link text says "all" so the two numbers aren't read as the same thing.
+  - **Link from Locations:** each card gets a link "All sessions at this site →" to `/sessions?site=<postal>`, next to the facts line. The card's "N billing sessions" (LOC-6) covers exactly the sessions this filter lists, so the card and the drill-down agree (amended by `2026-11-09-site-reconcile-design.md`).
+  - **Site totals and observing line (amended 2026-11-09):** on a site filter, the count line reads "{N} sessions in all · {kWh} est. · {$} est. at our 62/48 tariff", the same figures as the card, plus " · {n} on this page" when the filter spans more than one page. It is empty when the site has no session. Under the heading, LOC-8's line reads "Observing since 8 Nov, 16:50" or "Last 14 days".
   - A filter that matches nothing shows "No sessions at this site yet."
 - **NAV-3 Sort.** `sort` is `started` (default) or `energy`; `dir` is `desc` (default) or `asc`.
   - **Parameters:**
@@ -63,7 +64,7 @@ This work makes Locations the home page and Sessions its drill-down, and fixes t
   - Values are normalised, so `sort=started&dir=desc` and no parameters are the same page and the same cache key.
   - Ties break on `id` in the same direction, so the order is total.
   - **Energy in SQL** = `COALESCE(meter_stop_wh, max(meter_wh) of its readings, meter_start_wh) − meter_start_wh`.
-    - It is the expression LOC-6 already uses. It lives in one shared SQL constant, so the two can't drift.
+    - It is one shared SQL constant (`energyWhSQL`), matching the energy billing derives from the same data.
     - CheckReading and CheckStop keep meters monotonic and the stop meter at or above every reading, and BIL-6 conserves energy, so this equals the billed `EnergyWh`. A test proves it.
   - **Column headers:** Started and Energy are sort links. The active one has `aria-sort` and an arrow, and following it again reverses `dir`. Cost is shown but not sortable.
   - **Load:** the energy sort aggregates readings per render. That is accepted at this scale (mirror sessions are kept 14 days, MIR-9), and the existing render slots and the 8 s timeout bound it.
@@ -76,7 +77,7 @@ This work makes Locations the home page and Sessions its drill-down, and fixes t
     - a cursor without a direction, or with both;
     - a direction without a cursor.
   - **Back to the start:** a `before` request that reaches the start of the order answers `302` to the cursorless URL. The first page is always the live, cursorless one (NAV-5).
-  - **Count line:** "{n} on this page · {total} in all", where `total` is `COUNT(*)` over the filter.
+  - **Count line:** "{n} on this page · {total} in all", where `total` is `COUNT(*)` over the filter. On a site filter, NAV-2's site totals line replaces it.
   - **Energy sort and active sessions:** an active session's energy grows, so rows can move between pages while you page. This is accepted, because only the first page is live.
 - **NAV-5 Live scope.** Only the first page of any filter and sort updates live.
   - **Stream query:** `view=list` plus the normalised `site`, `sort` and `dir`. `/events` validates them like the page and answers any invalid value with a plain 400, as it does today for an unknown view.
@@ -89,8 +90,9 @@ This work makes Locations the home page and Sessions its drill-down, and fixes t
   - A mirror session's energy and cost carry "est." wherever they appear: list cells, detail summary, segment table and totals.
   - A total that includes any mirror session is marked "est.".
   - **The tariff name is built from the tariff's own rates** (LIVE-4), written below as "62/48". If the tariff changes, every label follows.
-  - **List column headers:** Charger · Started · Status · Energy · Cost (62/48 tariff).
-  - **Locations facts line:** "… · est. value at today's posted price (operator's price, not the 62/48 billing tariff)".
+  - **List column headers:** Charger · Started · Status · Energy · Cost (our 62/48 tariff).
+  - **Locations facts line:** "… · $114.18 est." (LOC-6, amended 2026-11-09); the header key and the notice below the cards name the tariff. The operator's posted price is not on the Locations page.
+  - **Posted price in the charger line (NAV-2, 2026-11-09):** on a site filter only, each row's charger line ends with that charger's posted price today: "MARINA SQUARE · Testco · 22 kW AC · posted $0.6976/kWh", "posted free" or "posted price n/a". It is a fact about the charger and never enters a total; the table keeps its five columns.
   - Rates read "62¢/kWh" everywhere: the header, the legends, and the detail Rate column, which today prints "$0.62/kWh".
 - **VIEW-2 Occupied, not charging.**
   - A mirror session whose SES-4 status is `charging` is shown as "occupied". `stale` and `completed` are unchanged. (UI-6 in the original spec: `stale` is shown as "no recent update".)
@@ -261,7 +263,7 @@ Each test names its rule.
 ## Calls made during design (check these)
 
 - **The status element's paused state comes from a 75 s watchdog** in `live.js`, rather than recomputing "N min ago" in the browser as the brief proposed. The server already re-renders every 30 s, so a page that isn't receiving events is the real failure. The watchdog catches it without copying `FormatAgo`'s thresholds into JavaScript.
-- **The card link reads "All sessions at this site →".** It is a separate link, not the LOC-6 count, because the count covers the observation window and current scope while the list covers every stored session at that postal code.
+- **The card link reads "All sessions at this site →".** Since 2026-11-09 the card's LOC-6 figures and the drill-down's site totals cover the same sessions at the same tariff, so they agree.
 - **Sortable columns are Started and Energy.** Cost isn't sortable (decided with the user).
 - **Only the first page is live,** and `before` back to the start redirects there.
 - **`/locations` answers 301** rather than serving the page at two URLs.
@@ -283,12 +285,12 @@ Each test names its rule.
 | Site heading | The h1 reads "Sessions at {site name}", followed by the link "Show all sites" (keeps sort and dir). Without a filter the h1 is "Charging sessions". |
 | Card link | All sessions at this site → |
 | Empty site | No sessions at this site yet. |
-| Count line | {n} on this page · {total} in all. Hidden when nothing matches the filter (the empty-state copy says so). |
+| Count line | {n} on this page · {total} in all. Hidden when nothing matches the filter (the empty-state copy says so). On a site filter: {N} sessions in all · {kWh} est. · {$} est. at our 62/48 tariff[ · {n} on this page]. |
 | Pager | ← Previous · Next → |
 | Cursor page | Not live. Back to the first page (shown in place of the feed line) |
-| List headers | Charger · Started · Status · Energy · Cost (62/48 tariff) |
+| List headers | Charger · Started · Status · Energy · Cost (our 62/48 tariff) |
 | List total | Total, these {n} sessions / Total, this 1 session |
-| Locations facts | … · est. $737.05 at posted prices (UI-4; was "… · est. value at today's posted price (operator's price, not the 62/48 billing tariff)") |
+| Locations facts | 7 billing sessions · 205.6 kWh est. · $114.18 est. (LOC-6, 2026-11-09; was "… · est. $737.05 at posted prices") |
 | Card percentage | {N}% · {H} h avg · observed, or {N}% alone when the window line states the same hours (UI-4) |
 | Card count | Now: {b} busy · {f} free · {o} out |
 | Hours line | Busiest {hh}:00–{hh+1 mod 24}:00 ({p}%) · quietest … / Every observed hour {N}% |
@@ -301,5 +303,5 @@ Each test names its rule.
 ## Left to implementation
 
 - The keyed update in `live.js`: a small keyed patch, or a whole swap followed by restoring focus and scroll. Either way, VIEW-6's observable behaviour is what the tests check.
-- Whether the energy sort uses a `LATERAL` subquery or a grouped join, as long as it shares LOC-6's expression.
+- Whether the energy sort uses a `LATERAL` subquery or a grouped join, as long as it uses the shared `energyWhSQL` expression.
 - The flash colour and easing, within the existing tokens.
