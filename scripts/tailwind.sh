@@ -36,7 +36,9 @@ if [ ! -x "$bin" ]; then
 	mkdir -p "$root/bin"
 	tmp="$bin.download"
 	echo "tailwind.sh: downloading $asset $VERSION" >&2
-	curl -fsSL --retry 3 -o "$tmp" "https://github.com/tailwindlabs/tailwindcss/releases/download/$VERSION/$asset"
+	# HTTPS only, for the request and every redirect (GitHub redirects release
+	# downloads to its asset host); the digest check below is the second guard.
+	curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 -o "$tmp" "https://github.com/tailwindlabs/tailwindcss/releases/download/$VERSION/$asset"
 	got=$(sha256 "$tmp")
 	if [ "$got" != "$sum" ]; then
 		rm -f "$tmp"
