@@ -6,209 +6,21 @@
 {{if .Stream}}<noscript><meta http-equiv="refresh" content="30"></noscript>
 <script src="/static/live.js" defer></script>
 {{end}}<title>{{.Title}} · EV billing</title>
-<style>
-:root { color-scheme:light; --ink:#1b2430; --muted:#566170; --line:#d8dde3; --bg:#f6f7f9; --card:#fff;
-  --peak:#f5b942; --peak-ink:#2b1a00; --off:#0f766e; --off-ink:#fff; --link:#0b5cad; --warn:#8a3b00;
-  --flash:color-mix(in srgb, var(--link) 16%, transparent); }
-* { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
-header, main, footer { max-width:56rem; margin:0 auto; padding:0 1rem; }
-header { padding-top:1.5rem; padding-bottom:.5rem; }
-.top { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:0 1rem; }
-.brand { color:var(--ink); font-weight:700; text-decoration:none; }
-nav { color:var(--muted); font-size:.95rem; }
-nav a { display:inline-block; padding:.5rem .125rem; text-decoration:none; }
-nav a:hover { text-decoration:underline; }
-nav a[aria-current="page"] { color:var(--ink); font-weight:600; text-decoration:underline; text-decoration-thickness:2px; text-underline-offset:.35em; }
-.skip { position:absolute; left:-999px; top:0; background:var(--card); padding:.5rem 1rem; z-index:1; }
-.skip:focus { left:0; }
-a:focus-visible, h1[tabindex]:focus-visible { outline:2px solid var(--link); outline-offset:2px; border-radius:2px; }
-/* live.js moves focus to the h1 when the focused item leaves the page (VIEW-6). */
-h1[tabindex]:focus:not(:focus-visible) { outline:0; }
-::selection { background:color-mix(in srgb, var(--link) 22%, transparent); }
-h1 { font-size:1.5rem; margin:.5rem 0 1rem; }
-a { color:var(--link); }
-.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:1rem; margin-bottom:1rem; overflow-x:auto; }
-table { width:100%; border-collapse:collapse; }
-th, td { text-align:left; padding:.5rem .75rem; border-bottom:1px solid var(--line); white-space:nowrap; }
-th { color:var(--muted); font-size:.85rem; font-weight:600; }
-td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
-tfoot td { font-weight:700; border-bottom:0; }
-.badge { display:inline-block; padding:.1rem .6rem; border-radius:999px; font-size:.85rem; font-weight:600; border:1px solid currentColor; }
-.charging { color:#0b5f2a; background:#e3f5e9; }
-.stale { color:#8a3b00; background:#fdebd8; }
-.completed { color:#3d4756; background:#e9ecf0; }
-dl { display:grid; grid-template-columns:max-content 1fr; gap:.25rem 1rem; margin:0; }
-dt { color:var(--muted); }
-dd { margin:0; }
-.summary { margin:0 0 1rem; font-size:1.125rem; font-weight:600; font-variant-numeric:tabular-nums; max-width:65ch; }
-.axis { display:flex; height:2.25rem; list-style:none; margin:0; padding:0; border-radius:4px; overflow:hidden; }
-/* Pieces take no padding or border, so each renders at exactly its width and the ticks line up. */
-.axis li { position:relative; flex:none; min-width:0; overflow:hidden; white-space:nowrap; padding:0; font-size:.85rem; font-weight:700; line-height:2.25rem; }
-.axis .lbl { display:block; padding:0 .5rem; }
-.axis li + li { box-shadow:inset 2px 0 0 var(--card); }
-.axis .peak { background:var(--peak); color:var(--peak-ink); }
-.axis .offpeak { background:var(--off); color:var(--off-ink); }
-.axis .track { background:var(--bg); box-shadow:inset 0 0 0 1px var(--line); }
-.axis li + li.track { box-shadow:inset 0 0 0 1px var(--line), inset 2px 0 0 var(--card); }
-.axis-ticks { position:relative; height:2.25rem; list-style:none; margin:.25rem 0 0; padding:0; font-size:.7rem; line-height:1.25; color:var(--muted); font-variant-numeric:tabular-nums; }
-.axis-ticks li { position:absolute; top:0; width:4rem; transform:translateX(-50%); text-align:center; }
-.axis-ticks li:first-child { transform:none; text-align:left; }
-/* From four ticks up, every second label drops to a second row so close boundaries do not collide. */
-.axis-ticks:has(li:nth-child(4)) { height:4rem; }
-.axis-ticks li:first-child:nth-last-child(n+4) ~ li:nth-child(even) { top:2.1rem; }
-/* From six ticks up (axes of about two days or more) it takes three rows. */
-.axis-ticks:has(li:nth-child(6)) { height:5.8rem; }
-.axis-ticks li:first-child:nth-last-child(n+6) ~ li:nth-child(3n+1) { top:0; }
-.axis-ticks li:first-child:nth-last-child(n+6) ~ li:nth-child(3n+2) { top:2rem; }
-.axis-ticks li:first-child:nth-last-child(n+6) ~ li:nth-child(3n) { top:4rem; }
-.axis-ticks li:last-child { transform:translateX(-100%); text-align:right; }
-.billing caption { caption-side:top; text-align:left; padding:0 .5rem .5rem; color:var(--muted); font-size:.85rem; font-weight:600; }
-.billing th, .billing td { padding:.5rem; white-space:normal; vertical-align:top; }
-.billing td.num { white-space:nowrap; }
-.billing tbody th, .billing tfoot th { color:var(--ink); font-size:1rem; }
-.billing tbody th { font-weight:400; }
-.billing tfoot th { font-weight:700; border-bottom:0; }
-.legend { display:flex; flex-wrap:wrap; gap:.25rem 1.25rem; list-style:none; margin:.75rem 0 0; padding:0; font-size:.85rem; color:var(--muted); }
-.legend li { display:flex; align-items:center; gap:.4rem; }
-.swatch { display:inline-block; width:.9rem; height:.9rem; border-radius:3px; }
-.swatch.peak { background:var(--peak); border:1px solid var(--peak-ink); }
-.swatch.offpeak { background:var(--off); }
-.empty { text-align:center; color:var(--muted); padding:2rem 1rem; white-space:normal; }
-.source { display:inline-block; padding:0 .4rem; border-radius:4px; font-size:.75rem; font-weight:600; vertical-align:middle; }
-.source.mirror { color:#0b4f8a; background:#e2eefb; }
-.source.simulated { color:#4b5563; background:#eef0f3; }
-.sub { color:var(--muted); font-size:.85rem; }
-.tariff { margin:.25rem 0 0; color:var(--muted); font-size:.9rem; }
-/* Written only by live.js (VIEW-6); empty, it takes no space. */
-.stream-status { margin:0; color:var(--muted); font-size:.9rem; font-weight:600; }
-.stream-status:not(:empty) { margin-top:.25rem; }
-.stream-status.reconnecting { color:var(--warn); }
-/* An item whose watched content changed: a 1 s tint that fades out, or a ring on a connector cell. */
-@media (prefers-reduced-motion: no-preference) {
-  .flash { animation:flash 1s cubic-bezier(.16, 1, .3, 1); }
-  .cell.flash { outline:2px solid transparent; outline-offset:1px; animation-name:flash-ring; }
-  @keyframes flash { from { background-color:var(--flash); } }
-  @keyframes flash-ring { from { outline-color:var(--link); } }
-}
-.notice { color:var(--muted); font-size:.9rem; margin:0 0 1rem; max-width:65ch; }
-.feed { margin:0 0 .75rem; color:var(--muted); font-size:.9rem; }
-.feed.warn { color:var(--warn); font-weight:600; }
-.window { margin:-.5rem 0 .25rem; color:var(--muted); font-size:.9rem; font-variant-numeric:tabular-nums; }
-.headline { margin:0 0 1rem; font-size:1.125rem; font-weight:600; line-height:1.4; max-width:65ch; text-wrap:balance; }
-.empty.warn { color:var(--warn); font-weight:600; }
-.site { position:relative; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:1rem; margin-bottom:1rem; }
-.site .head { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; }
-.site h2 { font-size:1.125rem; line-height:1.3; margin:0; }
-.site .sub { margin:.125rem 0 0; }
-.util { margin:0; text-align:right; line-height:1; flex:none; }
-.util .pct { display:block; font-size:2.25rem; font-weight:700; letter-spacing:-0.02em; font-variant-numeric:tabular-nums; }
-.util .label { display:block; margin-top:.3rem; font-size:.8rem; color:var(--muted); }
-.cells { display:flex; flex-wrap:wrap; gap:4px; list-style:none; margin:1rem 0 .5rem; padding:0; }
-.cell { display:block; flex:none; width:14px; height:14px; border-radius:3px; border:1.5px solid var(--ink); background:var(--card); }
-.cell.busy { background:var(--ink); }
-.cell.out { border-color:var(--muted); background:repeating-linear-gradient(135deg, var(--muted) 0 1.5px, var(--card) 1.5px 4px); }
-/* Last known: --muted at full strength (>= 3:1 on --card, VIEW-7), not faded. */
-.cells.muted .cell, .cell.muted { border-color:var(--muted); }
-.cells.muted .cell.busy, .cell.busy.muted { background:var(--muted); }
-.hours { margin:.5rem 0 0; font-size:.9rem; font-variant-numeric:tabular-nums; }
-.more { margin:.5rem 0 0; font-size:.95rem; }
-.more a { display:inline-block; padding:.5rem 0; font-weight:600; }
-.count { margin:0; font-size:.9rem; font-variant-numeric:tabular-nums; }
-.profile { margin-top:1rem; }
-.profile .caption { margin:0 0 .25rem; }
-.profile .legend { margin:0 0 .5rem; }
-.strip { display:flex; align-items:flex-end; gap:2px; height:3.5rem; list-style:none; margin:0; padding:0; border-bottom:1px solid var(--line); }
-.hour { flex:1 1 0; min-width:0; min-height:2px; border-radius:2px 2px 0 0; }
-.hour.peak { background:var(--peak); box-shadow:inset 0 0 0 1px var(--peak-ink); }
-.hour.offpeak { background:var(--off); }
-.hour.nodata { height:.5rem; border:1px dotted var(--muted); border-bottom:0; }
-.ticks { display:grid; grid-template-columns:repeat(24, minmax(0, 1fr)); column-gap:2px; margin-top:.25rem; font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
-.t00 { grid-column:1; } .t06 { grid-column:7; } .t12 { grid-column:13; } .t18 { grid-column:19; } .t23 { grid-column:24; justify-self:end; }
-.facts { margin:.75rem 0 0; font-size:.9rem; color:var(--muted); font-variant-numeric:tabular-nums; }
-.note { margin:.25rem 0 0; font-size:.85rem; font-weight:600; color:var(--muted); }
-/* Visually hidden, still read by screen readers. On a wrapper, since a table ignores width and overflow. */
-.vh { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.swatch.nodata { border:1px dotted var(--muted); }
-.scope { margin:-.5rem 0 1rem; }
-.tally { margin:0 0 .5rem; color:var(--muted); font-size:.9rem; font-variant-numeric:tabular-nums; }
-.sessions th, .sessions td { padding:.5rem; white-space:normal; vertical-align:top; }
-.sessions th a { text-decoration:none; }
-.sessions th a:hover { text-decoration:underline; }
-.sessions td.num { white-space:nowrap; }
-@media (min-width:48rem) { .sessions td.started { white-space:nowrap; } }
-.sessions .id { overflow-wrap:anywhere; }
-.sessions .id a { font-weight:600; }
-/* The charger link covers its whole row or card, so the row is the tap target. */
-.sessions tbody tr { position:relative; }
-.sessions tbody tr[data-key]:hover { background:var(--bg); }
-.sessions .id a::after { content:""; position:absolute; inset:0; border-radius:4px; }
-.sessions .id a:focus-visible { outline:0; }
-.sessions .id a:focus-visible::after { outline:2px solid var(--link); outline-offset:-2px; }
-.sessions tfoot th { color:var(--ink); font-size:1rem; font-weight:700; border-bottom:0; }
-.pager { display:flex; gap:1rem; margin-top:.5rem; font-size:1rem; }
-.pager a { display:inline-flex; align-items:center; padding:.5rem 0; font-weight:600; text-decoration:none; }
-.pager a:hover { text-decoration:underline; }
-.pager a[rel="next"] { margin-left:auto; }
-@media (max-width:39.99rem) {
-  nav a, .pager a, .more a, .scope a, .back a, .feed a, .empty a { min-height:44px; display:inline-flex; align-items:center; }
-  /* Rows become three-line cards. The header row stays as a strip of the sort
-     links and the cost's tariff; the other labels are visually hidden. */
-  .sessions, .sessions thead, .sessions tbody, .sessions tfoot { display:block; }
-  .sessions thead tr { display:flex; flex-wrap:wrap; column-gap:1rem; border-bottom:1px solid var(--line); }
-  .sessions thead th { display:block; padding:0; border:0; }
-  .sessions thead th.num { text-align:left; }
-  /* Mirrors .vh, for phones only: these labels show as column heads from 40rem up. */
-  .sessions thead .charger, .sessions thead .status { position:absolute; width:1px; height:1px; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-  .sessions thead a, .sessions thead th:last-child { display:inline-flex; align-items:center; gap:.25rem; min-height:44px; }
-  .sessions tbody tr { display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-areas:"id status" "energy cost" "where started"; gap:.25rem 1rem; padding:.75rem 0; border-bottom:1px solid var(--line); }
-  .sessions tbody td { display:block; padding:0; border:0; }
-  .sessions td.charger { display:contents; }
-  .sessions .id { grid-area:id; align-self:center; }
-  .sessions td.charger .sub { grid-area:where; }
-  .sessions td.status { grid-area:status; text-align:right; }
-  .sessions td.energy { grid-area:energy; text-align:left; }
-  .sessions td.cost { grid-area:cost; }
-  .sessions td.started { grid-area:started; text-align:right; color:var(--muted); font-size:.85rem; }
-  .sessions td.started .sub { font-size:inherit; }
-  .sessions tbody tr.none { display:block; }
-  .sessions tfoot tr { display:flex; flex-wrap:wrap; justify-content:space-between; gap:0 1rem; padding-top:.75rem; }
-  .sessions tfoot th, .sessions tfoot td { display:block; padding:0; border:0; }
-  .sessions tfoot th { flex-basis:100%; }
-}
-@media (max-width:39.99rem) {
-  /* Each row becomes a small card: window and cost, then times and energy, then the rate. The
-     column heads stay for screen readers; the figures name themselves. */
-  .billing, .billing thead, .billing tbody, .billing tfoot { display:block; }
-  .billing thead { position:absolute; width:1px; height:1px; margin:-1px; overflow:hidden; clip-path:inset(50%); }
-  .billing caption { display:block; }
-  .billing tbody tr { display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-areas:"label cost" "times energy" "rate ."; gap:.125rem 1rem; padding:.625rem 0; border-bottom:1px solid var(--line); }
-  .billing tbody th, .billing tbody td { padding:0; border:0; }
-  .billing .label { grid-area:label; font-weight:600; }
-  .billing td.cost { grid-area:cost; }
-  .billing td.times { grid-area:times; }
-  .billing td.energy { grid-area:energy; }
-  .billing td.rate { grid-area:rate; text-align:left; color:var(--muted); font-size:.85rem; }
-  .billing tfoot tr { display:flex; justify-content:space-between; gap:0 1rem; padding-top:.625rem; }
-  .billing tfoot th, .billing tfoot td { padding:0; border:0; }
-  .billing tfoot td:empty { display:none; }
-  .billing tfoot th { margin-right:auto; }
-}
-@media (max-width:359px) { .t06, .t18 { display:none; } }
-footer { color:var(--muted); font-size:.85rem; padding-bottom:2rem; }
-footer p { margin:.25rem 0; }
-</style>
+<style>{{appCSS}}</style>
 </head>
 <body{{with .Stream}} data-stream="{{.}}"{{end}}>
 <a class="skip" href="#content">Skip to content</a>
-<header>
-<div class="top"><a class="brand" href="/">EV billing</a>
-<nav aria-label="Pages"><a href="/"{{if eq .Nav "locations"}} aria-current="page"{{end}}>Locations</a> · <a href="/sessions"{{if eq .Nav "sessions"}} aria-current="page"{{end}}>Sessions</a></nav></div>
-<p class="tariff">{{.Tariff}}</p>
+<header class="site-header">
+<div class="navbar">
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.983 1.907a.75.75 0 0 0-1.292-.657l-8.5 9.5A.75.75 0 0 0 2.75 12h6.572l-1.305 6.093a.75.75 0 0 0 1.292.657l8.5-9.5A.75.75 0 0 0 17.25 8h-6.572l1.305-6.093Z" clip-rule="evenodd"/></svg></span>EV billing</a>
+<div class="navbar-end">{{if .Stream}}<span class="live-pill" aria-hidden="true">Live updates</span>{{end}}<ul class="tariff" aria-label="Tariff"><li><span class="swatch peak"></span>{{.Tariff.Peak}}</li><li><span class="swatch offpeak"></span>{{.Tariff.OffPeak}}</li></ul></div>
+</div>
 {{if .Stream}}<p class="stream-status" aria-live="polite" data-stream-status></p>
 {{end}}</header>
 <main id="content">
+<div class="page">
 {{template "content" .}}
+</div>
 </main>
 <footer>
 <p>Times are shown in {{.TZ}}.{{if .Stream}} This page updates live.{{end}}</p>

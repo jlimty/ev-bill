@@ -8,17 +8,59 @@ Live: https://ev-billing.onrender.com and https://ev-billing.onrender.com/sessio
 
 ## Architecture
 
+### Stack by layer
+
+Plain Go and its standard library at every layer: no web framework, no ORM, no JavaScript framework. The few libraries are named where they are used.
+
+```mermaid
+flowchart TB
+    BROWSER["<b>Browser</b><br/>HTML rendered by Go html/template<br/>Tailwind CSS v4, inlined · live.js: plain JS, EventSource"]
+    CHG["<b>Chargers</b> · cmd/simulator<br/>JSON over HTTPS, X-API-Key"]
+    HTTP["<b>HTTP</b> · Go net/http ServeMux, no web framework<br/>status pages + /events (Server-Sent Events) · JSON API: encoding/json, OpenAPI 3<br/>/healthz · log/slog JSON logs"]
+    BG["<b>Background work</b> · goroutines in one errgroup<br/>live mirror poller · retention · live hub · 30 s ticker"]
+    DOMAIN["<b>Domain</b> · plain Go, no I/O, no floats<br/>billing · sessions · locations<br/>integer cents and Wh"]
+    STORE["<b>Data access</b> · internal/store<br/>pgx v5, no ORM · row-locked transactions<br/>goose migrations, embedded SQL"]
+    PG[("<b>PostgreSQL 18</b><br/>Render, Singapore")]
+    LTA["<b>LTA DataMall</b><br/>EV charging feed, HTTPS"]
+
+    BROWSER -->|"HTTPS pages, SSE"| HTTP
+    CHG -->|"HTTPS JSON"| HTTP
+    CHG ~~~ BG
+    HTTP --> DOMAIN
+    BG --> DOMAIN
+    BG -->|"every 5 min"| LTA
+    BG -.->|"changed: re-render live pages"| HTTP
+    DOMAIN --> STORE
+    STORE --> PG
+```
+
+| Layer | Technology | Where |
+|---|---|---|
+| Browser | HTML rendered by Go's `html/template`; Tailwind CSS v4, built by the pinned standalone CLI (no Node) and inlined in each page because the CSP allows inline styles only; one plain-JS script (`EventSource`) for live updates, with a 30 s `<noscript>` refresh as the fallback | `internal/web/templates`, `internal/web/styles/app.css`, `internal/web/static/live.js` |
+| HTTP | Go `net/http` with `ServeMux` method patterns; Server-Sent Events for live pages; strict JSON decoding with `encoding/json`; `X-API-Key` compared in constant time | `internal/server`, `internal/web`, `internal/api` |
+| API contract | OpenAPI 3 (`api/openapi.yaml`); handler tests validate real responses with `kin-openapi` | `api/`, `internal/api` |
+| Domain | Plain Go, no I/O and no floats: money in integer cents, energy in integer Wh | `internal/billing`, `internal/sessions`, `internal/locations` |
+| Background work | Goroutines and channels under one `errgroup`: the mirror poller, retention job, live hub and 30 s ticker | `cmd/server`, `internal/mirror`, `internal/live` |
+| Integration | LTA DataMall over HTTPS with Go's `net/http` client | `internal/datamall` |
+| Data | PostgreSQL 18 through `pgx` v5 (no ORM); SQL migrations embedded in the binary and run at startup by `goose` | `internal/store` |
+| Logging | `log/slog` JSON logs with a request ID per request | `internal/server`, `internal/reqid` |
+| Tests | Go `testing` with `-race`; Playwright (`playwright-go`) for the browser tests; `gremlins` for mutation testing | `*_test.go`, `e2e/` |
+| Quality and security | `gofmt`, `go vet`, `golangci-lint`, `govulncheck`, `gitleaks`, Trivy (CycloneDX SBOM), SonarQube Cloud | `Makefile`, `.github/workflows/ci.yml`, `tools/` |
+| Deploy | Render Blueprint: one free Go web service and one free Postgres 18 database in Singapore, deployed only after CI passes on `main` | `render.yaml` |
+
+### Runtime view
+
 ```mermaid
 flowchart TB
     SIM["Chargers<br/>(cmd/simulator)"]
-    BROWSER["Browser<br/>/, /sessions, /sessions/{id}"]
+    BROWSER["Browser<br/>/, /sessions?site=, /sessions/{id}"]
     LTA["LTA DataMall<br/>EV charging feed"]
 
     subgraph RENDER["Render web service (cmd/server, one errgroup)"]
         direction TB
         SRV["server<br/>RequestLogger, 8 s deadline, /healthz"]
         API["api<br/>JSON, X-API-Key on POST"]
-        WEB["web<br/>html/template pages, /events (SSE)"]
+        WEB["web<br/>html/template + Tailwind CSS pages, /events (SSE)"]
         RC["render cache<br/>one render per view per change"]
         LOC["locations<br/>utilization, price, ordering (pure)"]
         SES["sessions<br/>rules, status, view"]
@@ -96,7 +138,7 @@ At startup and then every 5 minutes, `datamall` fetches the EV charging batch fi
 | `internal/sessions` | Session rules (start, reading, stop, limits), derived status, and the bill view |
 | `internal/store` | Postgres access with pgx, row-locked write transactions, embedded goose migrations |
 | `internal/api` | JSON handlers and `X-API-Key` middleware |
-| `internal/web` | Status pages rendered with `html/template`, the `/events` stream and `/static/live.js` |
+| `internal/web` | Status pages rendered with `html/template` and styled with Tailwind CSS (built into `static/app.css`, inlined), the `/events` stream and `/static/live.js` |
 | `internal/datamall` | DataMall client (link, then file download) and feed parser; integer watts, no floats |
 | `internal/mirror` | Poller, planner, reconciler, occupancy samples and retention job for the live mirror |
 | `internal/locations` | Pure utilization, price parsing, estimated value, site ordering and headline for the Locations page; integers only |
@@ -109,7 +151,7 @@ At startup and then every 5 minutes, `datamall` fetches the EV charging batch fi
 
 ## Quick start
 
-Prerequisites: Go (version in `go.mod`), Postgres 18 with two databases, `evbilling` and `evbilling_test`, and `golangci-lint`. `make check` builds `gitleaks` itself from the version pinned in `tools/gitleaks/go.mod`.
+Prerequisites: Go (version in `go.mod`), Postgres 18 with two databases, `evbilling` and `evbilling_test`, `golangci-lint`, and `curl`. `make check` builds `gitleaks` itself from the version pinned in `tools/gitleaks/go.mod`, and on first use downloads the pinned Tailwind CLI into `bin/` and checks its SHA-256.
 
 ```sh
 createdb evbilling
@@ -154,7 +196,7 @@ Open http://localhost:8080/ for the status page.
 API_KEY=dev go run ./cmd/simulator -start 2026-11-06T21:40:00+08:00 -speed 600
 ```
 
-This replays three chargers (`CP-01` to `CP-03`) over 155 minutes at 7.2 kW with a reading every 5 minutes, compressed by `-speed`. Each session crosses the 23:00 boundary and totals $10.27 (595 cents peak plus 432 cents off-peak). While a replay runs, its sessions show as `stale` on the status page (the readings are in the past); each ends `completed` once the simulator stops it. Run `go run ./cmd/simulator -h` for all flags.
+This replays three chargers (`CP-01` to `CP-03`) over 155 minutes at 7.2 kW with a reading every 5 minutes, compressed by `-speed`. Each session crosses the 23:00 boundary and totals $10.27 (595 cents peak plus 432 cents off-peak). While a replay runs, its sessions show as "no recent update" on the status page (status `stale`: the readings are in the past); each ends `completed` once the simulator stops it. Run `go run ./cmd/simulator -h` for all flags.
 
 ## API
 
@@ -170,6 +212,8 @@ The contract is [`api/openapi.yaml`](api/openapi.yaml); handler tests validate r
 | GET | `/healthz` | none | 200, or 503 if the database ping fails within 2 s |
 
 Status pages: `/` (Locations, see [Locations](#locations)), `/sessions` (filtered by site, sorted and paged) and `/sessions/{id}` (segment bar and table). `/locations` redirects to `/`. They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 30 s.
+
+The pages have no nav menu: they are a drill-down. "EV billing" in the header goes to Locations; each site card links to that site's sessions (`/sessions?site=<postal>`); each session links back to its site's list. Simulated sessions have no site, so they appear only in the unfiltered `/sessions` list, which a simulated session's back link and the error pages lead to. The header's tariff key (peak and off-peak swatches with their hours and rates) is the colour key for every chart. A session with no reading for 15 minutes is labelled "no recent update" (status `stale` in the API).
 
 ## Live mirror
 
@@ -213,8 +257,8 @@ The first poll runs at startup; the feed line on http://localhost:8080/ shows th
 Observed figures come straight from LTA's occupancy data:
 
 - **Utilization** is busy ÷ (busy + free), summed over the occupancy samples the mirror writes on every applied poll. Out-of-service connectors are not capacity, so they are left out. Time the mirror was not watching (sleep, deploy, feed outage) has no samples, so it never counts as idle. A site whose connectors were all out of service shows `n/a`.
-- **The 24-hour strip** is the same ratio by hour of day in Singapore time. Each bar is coloured by the tariff window of its hour. A dotted outline marks an hour with no samples, which is not the same as 0%.
-- **The connector grid** shows each connector's latest state: busy (solid), free (outline) or out of service (hatched), with a text count beside it. When the mirror is off, the feed is delayed, or no update has arrived since startup, the grid is greyed and the count reads "as of HH:MM", with the date when that is not today.
+- **The 24-hour strip** is the same ratio by hour of day in Singapore time. Each bar is coloured by the tariff window of its hour, keyed by the tariff swatches in the header. A dotted outline marks an hour with no samples, which is not the same as 0%; a strip that has such hours shows a "no data" key beside its caption.
+- **The connector grid** shows each connector's latest state: busy (solid blue), free (green outline) or out of service (grey hatch), with a text count beside it. When the mirror is off, the feed is delayed, or no update has arrived since startup, busy cells fade to pale blue inside their blue edge and the count reads "as of HH:MM", with the date when that is not today.
 - **The headline** pools busy and free time across the sites that have enough data, so larger sites weigh more. It is not an average of the sites' percentages.
 
 **Billing sessions** count the mirror sessions started in the window at a site's chargers. The count is not an estimate. A gap or the 48 h limit can split one car's stay into more than one, hence "billing sessions".
@@ -231,8 +275,9 @@ The window is the last 14 days, or since the first sample when that is later ("S
 `make check` runs the local gates and CI runs the same checks. See [`docs/playbook.md`](docs/playbook.md) for detail.
 
 - **lint**: `gofmt` check, `go vet`, `golangci-lint` (forbids `time.Local`, `errcheck` with `check-blank`).
+- **css-check**: rebuilds the pages' stylesheet with the pinned, checksum-verified Tailwind CLI and fails if the committed `internal/web/static/app.css` is out of date (`make css` rebuilds it).
 - **test**: `go test -race`; coverage at least 80% across `internal/...` and at least 95% for `internal/billing`.
-- **test-tz**: billing tests under `TZ=UTC` and `TZ=America/New_York`.
+- **test-tz**: billing and web time tests under `TZ=UTC` and `TZ=America/New_York`.
 - **vuln**: `govulncheck`.
 - **secrets**: `gitleaks` over git history and the working tree.
 - **sonar**: SonarQube Cloud quality gate (CI only).
@@ -242,7 +287,7 @@ The window is the last 14 days, or since the first sample when that is later ("S
 
 ## Deployment
 
-[`render.yaml`](render.yaml) is a Render Blueprint with one free Go web service (`ev-billing`) and one free Postgres 18 database (`ev-billing-db`), both in Singapore. The service builds with `go build -o bin/server ./cmd/server`, health-checks `/healthz`, and uses `autoDeployTrigger: checksPass`, so Render deploys only after every required CI check on `main` passes. `DATABASE_URL` comes from the database; `API_KEY` and `LTA_ACCOUNT_KEY` are set in the Render dashboard and are never committed. Migrations run at startup.
+[`render.yaml`](render.yaml) is a Render Blueprint with one free Go web service (`ev-billing`) and one free Postgres 18 database (`ev-billing-db`), both in Singapore. The service builds with `go build -o bin/server ./cmd/server` (the stylesheet is already built and embedded, so the deploy needs no Tailwind), health-checks `/healthz`, and uses `autoDeployTrigger: checksPass`, so Render deploys only after every required CI check on `main` passes. `DATABASE_URL` comes from the database; `API_KEY` and `LTA_ACCOUNT_KEY` are set in the Render dashboard and are never committed. Migrations run at startup.
 
 Free-tier limits (Render's free-tier terms as of November 2026):
 

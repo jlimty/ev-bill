@@ -14,8 +14,10 @@ A small Go service that bills EV charging sessions on a peak/off-peak tariff, wi
 
 ## Commands
 
-- `make check`: runs every local gate (`fmt-check`, `lint`, `test`, `test-tz`, `vuln`, `secrets`). It must pass before any commit.
+- `make check`: runs every local gate (`fmt-check`, `css-check`, `lint`, `test`, `test-tz`, `vuln`, `secrets`). It must pass before any commit.
 - `make fmt-check`: fails if `gofmt` would change a file.
+- `make css`: builds the status pages' stylesheet (UI-3) from `internal/web/styles/app.css` into `internal/web/static/app.css` with the pinned Tailwind CLI (`scripts/tailwind.sh` downloads it into `bin/` and checks its SHA-256). Run it after changing the stylesheet source or a template's classes, and commit both files.
+- `make css-check`: fails if the committed `app.css` differs from a fresh build, or if the Tailwind CLI cannot run.
 - `make lint`: `go vet` and `golangci-lint` (includes a rule that forbids `time.Local`).
 - `make test`: tests with `-race` and coverage, then the coverage gate (`scripts/coverage-gate.sh`).
 - `make test-tz`: billing and web time tests (VIEW-4 axis, VIEW-8 clock) under `TZ=UTC` and `TZ=America/New_York`.
@@ -47,7 +49,7 @@ Integration tests use the `evbilling_test` database through `TEST_DATABASE_URL`.
 - Env vars: `PORT`, `DATABASE_URL` and `API_KEY` are required. `LTA_ACCOUNT_KEY`, `DATAMALL_BASE_URL` (default `https://datamall2.mytransport.sg`) and `MIRROR_POSTAL_CODES` are optional. Tests use `TEST_DATABASE_URL`. Health ping timeout 2 s, shutdown timeout 10 s.
 - Coverage: ≥ 80% across `./internal/...` and ≥ 95% for `internal/billing`.
 - Postgres major version `18` (≥ 13) is identical locally, in CI and on Render.
-- Not allowed: web frameworks, ORMs, JS frameworks, Docker.
+- Not allowed: web frameworks, ORMs, JS frameworks, Docker. Tailwind CSS is allowed as a build tool only: the standalone CLI, no Node, and its output inlined in the page (UI-3).
 - `make check` passes before every commit. Commit format is `<RULE-ID|area>: summary`, keeping the AI co-author trailer.
 
 ## Rules for every change
@@ -56,6 +58,7 @@ Integration tests use the `evbilling_test` database through `TEST_DATABASE_URL`.
 - Write tests from the spec rule IDs, not from the implementation. Each test names the spec rule it checks, in the test name or in a comment on the test. A test that only restates what the code does proves nothing.
 - A new or changed gate must be shown failing before it is trusted, including when its own tool crashes or is missing.
 - Commit message format: `<RULE-ID|area>: summary`, for example `BIL-6: conserve Wh on split`. Keep the AI co-author trailer.
+- Keep `README.md` current in the same change: when behaviour, pages, layers, libraries or tooling change, update the affected sections and both architecture diagrams (the stack-by-layer view, which names each layer's technology, and the runtime view).
 
 ## How to work each task
 

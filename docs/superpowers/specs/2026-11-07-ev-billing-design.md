@@ -68,6 +68,18 @@ A small Go service that bills EV charging sessions, delivered through spec-first
 - **UI-1** `/sessions` lists the sessions 50 to a page, newest first (charger, start, status badge, energy, cost), and updates live by push (LIVE-1..3 in the live-mirror design); the 30 s meta refresh (VIEW-6) stays as the no-JS fallback. It moved from `/`, which now serves the Locations page, and gained the site filter, sort and paging of NAV-2..5 and the labels and layout of VIEW-1..3 (all in the home-and-sessions design).
 - **UI-2** `/sessions/{id}` shows a horizontal bar of peak/off-peak segments with boundary times, plus a segment table (window, energy, rate, cost) and the total. It gains VIEW-4 (home-and-sessions design): the charger ID as the h1, a summary line, and the bar on a time axis with labelled tariff boundaries.
 - Built with Go's `html/template` and a little CSS. No JavaScript framework.
+- **UI-3** The pages are styled with Tailwind CSS, built by the pinned standalone CLI (`scripts/tailwind.sh`, which checks the binary's SHA-256; no Node) from `internal/web/styles/app.css` into `internal/web/static/app.css`. The built file is committed, embedded in the binary and inlined in each page's `<style>`, because the CSP below allows inline styles only; there is no stylesheet request and no web font. `make css-check` (part of `make check` and CI) fails when the built file differs from a fresh build.
+- **UI-4** Each fact is shown once (2026-11-09). It changes these rules:
+  - **Tariff header (LIVE-4):** a key with one entry per window, a swatch beside "Peak 07–23 · 62¢/kWh" and "Off-peak 23–07 · 48¢/kWh", built from the tariff's own values. It is the colour key for every tariff mark on the pages. The time zone is named once, in the footer ("Times are shown in Singapore time").
+  - **Strip legends (VIEW-5):** the per-card peak/off-peak legend goes; the header key replaces it. A strip caption shows the no-data key only when that strip has an hour without data.
+  - **Card percentage (VIEW-5):** the card shows "{N}%" alone when the window line already states its observed hours and the site's hours equal them. Otherwise it keeps "{N}% · {H} h avg · observed".
+  - **Facts line (LOC-6):** the value reads "est. $737.05 at posted prices", so the price basis is still named where the money is shown. The notice below the cards keeps the full explanation (the operator's price, not the 62/48 billing tariff).
+- **UI-5** Navigation is a drill-down from Locations (2026-11-09). It changes these rules:
+  - **Header (NAV-1):** no nav. The brand "EV billing" links to `/`, the Locations page. The routes are unchanged: `/sessions` still serves the unfiltered list, which is the only list that shows simulated sessions.
+  - **Site list (NAV-2):** the h1 "Sessions at {site name}" has no "Show all sites" link.
+  - **Detail back link (VIEW-4):** a real charger's session links back to its site's list, "← Sessions at {site name}", with the name from VIEW-5's naming rule. A simulated session, or a real one whose charger has no `chargers` row, links to "← All sessions" at `/sessions`.
+  - Every Locations empty state still links "See sessions →", and the error pages still link to `/sessions`.
+- **UI-6** A stale session (SES-4) is labelled "no recent update" on the pages, for both sources (2026-11-09). The badge keeps its `stale` styling, and the API's `status` field still says `stale`.
 - The Content-Security-Policy is `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`; `script-src` and `connect-src` allow the live push (LIVE-3).
 
 ## Operations (Render-ready from the first commit)

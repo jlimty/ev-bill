@@ -43,7 +43,6 @@ type locationsPage struct {
 	Feed     feedLine
 	Headline string
 	Sites    []siteCard
-	Legend   barLegend
 	Notice   string
 }
 
@@ -54,9 +53,9 @@ type siteCard struct {
 	Muted             bool
 	Count             string
 	Util              string // "23%" or "n/a"
-	Observed          bool   // Util is a percentage, so it carries UtilLabel
-	UtilLabel         string // "31 h avg · observed" (VIEW-5)
+	UtilLabel         string // "31 h avg · observed" when the window line does not already say so (VIEW-5, UI-4)
 	Hours             []hourBar
+	NoData            bool   // some hour of the strip has no data, so the strip shows the no-data key (UI-4)
 	HoursLine         string // busiest and quietest hours, for a sufficient site (VIEW-5)
 	Link              string // the site's sessions (NAV-2)
 	Facts, Collecting string
@@ -84,7 +83,7 @@ func (p *Pages) locationsRedirect(w http.ResponseWriter, r *http.Request) {
 func (p *Pages) locations(w http.ResponseWriter, r *http.Request) {
 	data, err := p.locationsData(r.Context())
 	if err != nil {
-		p.serverError(w, r, "", "locations page", err)
+		p.serverError(w, r, "locations page", err)
 		return
 	}
 	p.render(w, r, http.StatusOK, "locations", data)
@@ -117,10 +116,8 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 	data := locationsPage{
 		layoutData: p.layout("Locations", "view=locations"),
 		Feed:       line,
-		Legend:     barLegend{Peak: peakLegend(p.Tariff), OffPeak: offPeakLegend(p.Tariff)},
 		Notice:     locationsNotice(p.Tariff),
 	}
-	data.Nav = navLocations
 	if len(aggs) == 0 {
 		data.Empty = line
 		if !st.Enabled {
@@ -211,7 +208,9 @@ func (p *Pages) siteCard(a store.LocationAggregate, muted bool, lead string, win
 	if a.PriceNASessions > 0 {
 		facts = append(facts, "price n/a for "+plural(a.PriceNASessions, "session", "sessions"))
 	}
-	facts = append(facts, FormatCents(a.ValueCents)+" est. value at today's posted price (operator's price, not the "+tariffName(p.Tariff)+" billing tariff)")
+	// The price basis is named here, where the money is shown; the notice
+	// below the cards says it is the operator's price, not our tariff (UI-4).
+	facts = append(facts, "est. "+FormatCents(a.ValueCents)+" at posted prices")
 	sub := []string{joinNonEmpty(", ", a.Operators...), plural(int64(len(a.Chargers)), "connector", "connectors")}
 	for _, n := range a.Also {
 		sub = append(sub, "also "+n)
@@ -226,8 +225,12 @@ func (p *Pages) siteCard(a store.LocationAggregate, muted bool, lead string, win
 		Facts:  strings.Join(facts, " · "),
 	}
 	if bp, ok := locations.UtilizationBP(a.Occupied, a.Available); ok {
-		c.Util, c.Observed = fmt.Sprintf("%d%%", locations.PercentFromBP(bp)), true
-		c.UtilLabel = fmt.Sprintf("%d h avg · observed", hours)
+		c.Util = fmt.Sprintf("%d%%", locations.PercentFromBP(bp))
+		// The window line already states the observed hours; the card repeats
+		// them only when its own differ, or when the line has none (UI-4).
+		if !windowHours || hours != maxHours {
+			c.UtilLabel = fmt.Sprintf("%d h avg · observed", hours)
+		}
 	}
 	if locations.Sufficient(a.Samples) {
 		c.HoursLine = hoursLine(a.Hours)
@@ -236,7 +239,9 @@ func (p *Pages) siteCard(a store.LocationAggregate, muted bool, lead string, win
 	}
 	c.Cells, c.Count = cells(a.Chargers, lead)
 	for h, agg := range a.Hours {
-		c.Hours = append(c.Hours, hour(h, agg))
+		bar := hour(h, agg)
+		c.NoData = c.NoData || bar.Class == "nodata"
+		c.Hours = append(c.Hours, bar)
 	}
 	return c
 }

@@ -30,12 +30,6 @@ type sortHeader struct {
 	URL, Sort string
 }
 
-// listSite is the site a filtered list shows (NAV-2): its name, and the link
-// to every site's sessions in the same order.
-type listSite struct {
-	Name, AllURL string
-}
-
 // listPage is the list page and its live fragment (NAV-2..5, VIEW-1..3).
 // Heading is the h1: "Sessions at {site name}" on a site filter (NAV-2),
 // else "Charging sessions". FirstPage is set on a cursor page, which is not
@@ -48,7 +42,6 @@ type listPage struct {
 	Notice                 string
 	Feed                   feedLine
 	FirstPage              string
-	Site                   *listSite
 	Caption, Count, Empty  string
 	CostHeader             string
 	Started, Energy        sortHeader
@@ -95,7 +88,7 @@ func (p *Pages) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		p.serverError(w, r, navSessions, "list page", err)
+		p.serverError(w, r, "list page", err)
 		return
 	}
 	if q.Before && !data.HasPrev {
@@ -130,7 +123,6 @@ func (p *Pages) badList(w http.ResponseWriter, r *http.Request, q listQuery, err
 // listError renders an error page under /sessions, which marks Sessions (NAV-1).
 func (p *Pages) listError(w http.ResponseWriter, r *http.Request, status int, title, heading, message, link, linkText string) {
 	data := p.layout(title, "")
-	data.Nav = navSessions
 	p.render(w, r, status, "error", errorPage{layoutData: data, Heading: heading, Message: message, LinkURL: link, LinkText: linkText})
 }
 
@@ -149,7 +141,6 @@ func (p *Pages) listData(ctx context.Context, q listQuery) (listPage, error) {
 		CostHeader: "Cost (" + tariffName(p.Tariff) + " tariff)",
 		Rows:       []listRow{},
 	}
-	data.Nav = navSessions
 	if q.Site != "" {
 		name, found, err := p.Store.SiteName(ctx, q.Site)
 		if err != nil {
@@ -158,9 +149,6 @@ func (p *Pages) listData(ctx context.Context, q listQuery) (listPage, error) {
 		if !found {
 			return listPage{}, errUnknownSite
 		}
-		all := q
-		all.Site = ""
-		data.Site = &listSite{Name: name, AllURL: all.firstPage()}
 		heading := "Sessions at " + name
 		data.Title, data.Heading, data.Caption, data.Empty = heading, heading, heading, "No sessions at this site yet."
 	}

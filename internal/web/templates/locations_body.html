@@ -11,19 +11,14 @@
 {{range .Sites}}<article class="site" data-key="{{.Postal}}">
 <div class="head">
 <div><h2>{{.Name}}</h2><p class="sub">{{.Sub}}</p></div>
-<p class="util"><span class="pct" data-watch>{{.Util}}</span>{{if .Observed}}<span class="vh">&nbsp;·&nbsp;</span><span class="label">{{.UtilLabel}}</span>{{end}}</p>
+<p class="util"><span class="pct" data-watch>{{.Util}}</span>{{with .UtilLabel}}<span class="vh">&nbsp;·&nbsp;</span><span class="label">{{.}}</span>{{end}}</p>
 </div>
 <ul class="cells{{if .Muted}} muted{{end}}" aria-hidden="true">
 {{range .Cells}}<li class="cell {{.Class}}" data-key="{{.Key}}" data-watch title="{{.Title}}"></li>
 {{end}}</ul>
 <p class="count" data-watch>{{.Count}}</p>
 <div class="profile">
-<p class="sub caption" aria-hidden="true">Busy by hour of day · observed</p>
-<ul class="legend" aria-hidden="true">
-<li><span class="swatch peak"></span>{{$.Legend.Peak}}</li>
-<li><span class="swatch offpeak"></span>{{$.Legend.OffPeak}}</li>
-<li><span class="swatch nodata"></span>no data</li>
-</ul>
+<p class="sub caption" aria-hidden="true">Busy by hour of day · observed{{if .NoData}}<span class="nodata-key"><span class="swatch nodata"></span>no data</span>{{end}}</p>
 <ol class="strip" aria-hidden="true">
 {{range .Hours}}<li class="hour {{.Class}}"{{with .Height}} style="height:{{.}}%"{{end}} title="{{.Title}}"></li>
 {{end}}</ol>

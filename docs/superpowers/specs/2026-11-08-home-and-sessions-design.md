@@ -46,13 +46,13 @@ This work makes Locations the home page and Sessions its drill-down, and fixes t
   - `GET /sessions` serves the sessions list (UI-1's content).
   - `GET /sessions/{id}` is unchanged.
   - `GET /locations` answers `301 Moved Permanently` to `/`, so existing links keep working.
-  - The header nav reads "Locations · Sessions", in that order. The brand link goes to `/`.
-  - `aria-current="page"` marks the current section's nav link. Locations marks Locations. The list, the detail page, and every error page under `/sessions` mark Sessions. Other error pages mark nothing.
+  - The header nav reads "Locations · Sessions", in that order. The brand link goes to `/`. (UI-5 in the original spec: no nav; the brand link is the header's only link.)
+  - (Superseded by UI-5: with no nav, nothing is marked.) `aria-current="page"` marks the current section's nav link. Locations marks Locations. The list, the detail page, and every error page under `/sessions` mark Sessions. Other error pages mark nothing.
   - **Every Locations empty state carries a link to the sessions.** That covers mirror off, and mirror on with no poll yet; both apply whenever no charger is in scope, as today (`len(aggs) == 0`). The link reads "See sessions →" and goes to `/sessions`. `/` never serves the sessions list.
 - **NAV-2 Site filter.** `GET /sessions?site=<postal>` lists only `mirror` sessions whose charger has a `chargers` row with that postal code. This covers every stored session at that site, including chargers no longer in the current scope.
   - **Malformed `site`** (not `^[0-9]{6}$`): 400, with the error page "Postal codes have 6 digits." and a link "Show all sessions". The value is not echoed.
   - **Well-formed but absent from `chargers`:** 404, with "No watched site has postal code {postal}." and a link "Show all sessions".
-  - **Heading:** "Sessions at {site name} · Show all sites". The site name comes from VIEW-5's naming rule, applied to that postal code's rows in its newest observation.
+  - **Heading:** "Sessions at {site name} · Show all sites" (UI-5 in the original spec: the "Show all sites" link goes). The site name comes from VIEW-5's naming rule, applied to that postal code's rows in its newest observation.
   - **Link from Locations:** each card gets a link "All sessions at this site →" to `/sessions?site=<postal>`, next to the facts line. The card's "N billing sessions" (LOC-6) stays as it is: a count over the observation window and current scope. The link text says "all" so the two numbers aren't read as the same thing.
   - A filter that matches nothing shows "No sessions at this site yet."
 - **NAV-3 Sort.** `sort` is `started` (default) or `energy`; `dir` is `desc` (default) or `asc`.
@@ -93,7 +93,7 @@ This work makes Locations the home page and Sessions its drill-down, and fixes t
   - **Locations facts line:** "… · est. value at today's posted price (operator's price, not the 62/48 billing tariff)".
   - Rates read "62¢/kWh" everywhere: the header, the legends, and the detail Rate column, which today prints "$0.62/kWh".
 - **VIEW-2 Occupied, not charging.**
-  - A mirror session whose SES-4 status is `charging` is shown as "occupied". `stale` and `completed` are unchanged.
+  - A mirror session whose SES-4 status is `charging` is shown as "occupied". `stale` and `completed` are unchanged. (UI-6 in the original spec: `stale` is shown as "no recent update".)
   - Simulated (`api`) sessions keep "charging".
   - The API's `status` field is unchanged; only the label on the page differs.
   - The source pill reads "real charger" for `mirror` and "simulated" for `api`.
@@ -125,14 +125,14 @@ This work makes Locations the home page and Sessions its drill-down, and fixes t
   - **Segment table:** a `<caption>`, `scope` on every `th`, and no horizontal scrolling at 320 px.
 - **VIEW-5 Locations page.**
   - **Time bases are labelled.**
-    - The card's percentage reads "{N}% · {H} h avg · observed".
+    - The card's percentage reads "{N}% · {H} h avg · observed". (UI-4 in the original spec: "{N}%" alone when the window line already states the same hours.)
     - The count line reads "Now: 1 busy · 19 free · 2 out", or "As of 13:20: …" when muted (LOC-5).
   - **The window is stated once,** in the page's window line.
     - A site that isn't sufficient keeps LOC-4's "collecting data · N h" note when its observed hours differ by at least 1 h from the hours in the window line, or when the window line shows no hours ("Last 14 days").
     - When any site is still collecting, the window line adds "· sites still collecting data follow in name order".
   - **Legends.**
     - A compact cell legend (busy, free, out of service, last known) sits above the first card.
-    - The tariff swatches (peak, off-peak, no data) sit beside each strip's caption.
+    - The tariff swatches (peak, off-peak, no data) sit beside each strip's caption. (UI-4 in the original spec: the header's tariff key replaces the peak and off-peak swatches; the no-data swatch shows only on a strip with an empty hour.)
     - Each legend group has at most 4 items, and the bottom 7-item legend goes.
   - **Busiest and quietest hours as visible text.** Once a site is sufficient (LOC-4), a line under its strip reads "Busiest 18:00–19:00 (43%) · quietest 03:00–04:00 (0%)".
     - Hours compare in basis points. Hours with no data are excluded, and ties go to the earliest hour. End hours wrap modulo 24 ("23:00–00:00").
@@ -288,8 +288,8 @@ Each test names its rule.
 | Cursor page | Not live. Back to the first page (shown in place of the feed line) |
 | List headers | Charger · Started · Status · Energy · Cost (62/48 tariff) |
 | List total | Total, these {n} sessions / Total, this 1 session |
-| Locations facts | … · est. value at today's posted price (operator's price, not the 62/48 billing tariff) |
-| Card percentage | {N}% · {H} h avg · observed |
+| Locations facts | … · est. $737.05 at posted prices (UI-4; was "… · est. value at today's posted price (operator's price, not the 62/48 billing tariff)") |
+| Card percentage | {N}% · {H} h avg · observed, or {N}% alone when the window line states the same hours (UI-4) |
 | Card count | Now: {b} busy · {f} free · {o} out |
 | Hours line | Busiest {hh}:00–{hh+1 mod 24}:00 ({p}%) · quietest … / Every observed hour {N}% |
 | Collecting order | · sites still collecting data follow in name order |

@@ -181,11 +181,31 @@ func TestDetailPage_ActiveWithoutReadings(t *testing.T) {
 	}
 }
 
-// UI-2, SES-4: a session with no reading for over 15 minutes shows as stale.
+// VIEW-2, UI-6: the label a page shows for each source and SES-4 status.
+func TestStatusLabel_VIEW2_UI6(t *testing.T) {
+	for _, c := range []struct {
+		src          sessions.Source
+		status, want string
+	}{
+		{sessions.SourceMirror, sessions.StatusCharging, "occupied"},
+		{sessions.SourceAPI, sessions.StatusCharging, "charging"},
+		{sessions.SourceMirror, sessions.StatusStale, "no recent update"},
+		{sessions.SourceAPI, sessions.StatusStale, "no recent update"},
+		{sessions.SourceMirror, sessions.StatusCompleted, "completed"},
+		{sessions.SourceAPI, sessions.StatusCompleted, "completed"},
+	} {
+		if got := statusLabel(c.src, c.status); got != c.want {
+			t.Errorf("statusLabel(%s, %s) = %q, want %q", c.src, c.status, got, c.want)
+		}
+	}
+}
+
+// UI-2, SES-4, UI-6: a session with no reading for over 15 minutes is stale,
+// and its badge says so in plain words: "no recent update".
 func TestDetailPage_StaleStatus(t *testing.T) {
 	e := newEnv(t)
 	id := e.start("CP-01", sgt(21, 40, 6))
-	wantContains(t, e.get("/sessions/"+id).Body.String(), badge("stale"))
+	wantContains(t, e.get("/sessions/"+id).Body.String(), `<span class="badge stale">no recent update</span>`)
 }
 
 // UI-2: unknown and malformed ids are an HTML 404.
@@ -348,7 +368,7 @@ func TestDetailPage_UI2_Exactly24hShowsDates(t *testing.T) {
 const liveScript = `<script src="/static/live.js" defer></script>`
 
 const (
-	tariffText  = "Peak 07:00–23:00 · 62¢/kWh · Off-peak 23:00–07:00 · 48¢/kWh · Singapore time"
+	tariffText  = `<ul class="tariff" aria-label="Tariff"><li><span class="swatch peak"></span>Peak 07–23 · 62¢/kWh</li><li><span class="swatch offpeak"></span>Off-peak 23–07 · 48¢/kWh</li></ul>`
 	attribution = "Charger data: LTA DataMall EV Charging Points."
 )
 
@@ -488,26 +508,21 @@ func TestList_LIVE4_FeedLineHeld(t *testing.T) {
 	}
 }
 
-// LIVE-4: the tariff header is built from the tariff's own values.
+// LIVE-4, UI-4: the tariff key is built from the tariff's own values, one
+// entry per window, and names no time zone (the footer does, once).
 func TestTariffHeader_LIVE4(t *testing.T) {
-	if got := tariffHeader(billing.SingaporeTariff()); got != tariffText {
-		t.Errorf("tariffHeader(Singapore) = %q, want %q", got, tariffText)
+	want := tariffKey{Peak: "Peak 07–23 · 62¢/kWh", OffPeak: "Off-peak 23–07 · 48¢/kWh"}
+	if got := tariffHeader(billing.SingaporeTariff()); got != want {
+		t.Errorf("tariffHeader(Singapore) = %+v, want %+v", got, want)
 	}
 	kl, err := time.LoadLocation("Asia/Kuala_Lumpur")
 	if err != nil {
 		t.Fatal(err)
 	}
 	other := billing.Tariff{Location: kl, PeakStartHour: 8, PeakEndHour: 22, PeakRateCentsPerKWh: 70, OffPeakRateCentsPerKWh: 40}
-	want := "Peak 08:00–22:00 · 70¢/kWh · Off-peak 22:00–08:00 · 40¢/kWh · Kuala Lumpur time"
+	want = tariffKey{Peak: "Peak 08–22 · 70¢/kWh", OffPeak: "Off-peak 22–08 · 40¢/kWh"}
 	if got := tariffHeader(other); got != want {
-		t.Errorf("tariffHeader(other) = %q, want %q", got, want)
-	}
-	// The bar legend uses the same per-window text.
-	if got := peakLegend(other); got != "Peak 08:00–22:00 · 70¢/kWh" {
-		t.Errorf("peakLegend(other) = %q", got)
-	}
-	if got := offPeakLegend(other); got != "Off-peak 22:00–08:00 · 40¢/kWh" {
-		t.Errorf("offPeakLegend(other) = %q", got)
+		t.Errorf("tariffHeader(other) = %+v, want %+v", got, want)
 	}
 }
 
@@ -636,10 +651,25 @@ func TestPages_LIVE4_ChargerDetailsOnlyForMirror(t *testing.T) {
 	}
 }
 
+// UI-5: a real charger's detail page links back to its site's list, named as
+// that list's heading names the site; a simulated session, which has no
+// site, links back to all sessions.
+func TestDetail_UI5_BackToSite(t *testing.T) {
+	e := newEnv(t)
+	e.siteCharger("SITE-1", "038983", "MARINA SQUARE")
+	mirror := e.mirrorSession("SITE-1", sgt(0, 0, 7), sgt(0, 10, 7), 1233)
+	wantContains(t, e.get("/sessions/"+mirror).Body.String(),
+		`<p class="back"><a href="/sessions?site=038983">&larr; Sessions at MARINA SQUARE</a></p>`)
+	wantContains(t, e.get("/sessions/"+e.mockup("CP-01")).Body.String(),
+		`<p class="back"><a href="/sessions">&larr; All sessions</a></p>`)
+}
+
 // VIEW-4: the bar legend is gone; the axis carries its own boundary labels.
+// The header's tariff key (UI-4) is page chrome, outside <main>.
 func TestDetail_VIEW4_NoLegend(t *testing.T) {
 	e := newEnv(t)
-	body := e.get("/sessions/" + e.mockup("CP-01")).Body.String()
+	page := e.get("/sessions/" + e.mockup("CP-01")).Body.String()
+	body := page[strings.Index(page, `<main id="content">`):]
 	for _, absent := range []string{`class="legend"`, `class="bar"`, `class="swatch`} {
 		if strings.Contains(body, absent) {
 			t.Errorf("VIEW-4: detail page still shows %q", absent)
@@ -648,33 +678,28 @@ func TestDetail_VIEW4_NoLegend(t *testing.T) {
 	wantContains(t, body, `<ol class="axis"`, `<ol class="axis-ticks"`, ">06 Nov 07:00<", ">06 Nov 23:00<", ">07 Nov 07:00<")
 }
 
-// navOf returns the text of the header link marked aria-current, or "".
-func navOf(t *testing.T, body string) string {
+// wantNoNav checks the header has no nav and marks no link current: the brand
+// links to Locations, and the sessions lists are reached by drilling down (UI-5).
+func wantNoNav(t *testing.T, body string) {
 	t.Helper()
-	m := regexp.MustCompile(`<a href="[^"]*" aria-current="page">([^<]*)</a>`).FindAllStringSubmatch(body, -1)
-	if len(m) > 1 {
-		t.Fatalf("%d links marked aria-current: %s", len(m), body)
+	if strings.Contains(body, "<nav") || strings.Contains(body, "aria-current") {
+		t.Errorf("UI-5: page has a nav or a current link: %.300s", body[strings.Index(body, "<header"):])
 	}
-	if len(m) == 0 {
-		return ""
-	}
-	return m[0][1]
+	wantContains(t, body, `<a class="brand" href="/">`)
 }
 
-// NAV-1: Locations is the home page, first in the nav and marked current.
+// NAV-1, UI-5: Locations is the home page, and the brand links to it; there
+// is no nav.
 func TestRoutes_NAV1_HomeIsLocations(t *testing.T) {
 	e := newEnv(t)
 	rec := e.get("/")
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	wantContains(t, body, "<h1>Locations</h1>",
-		`<nav aria-label="Pages"><a href="/" aria-current="page">Locations</a> · <a href="/sessions">Sessions</a></nav>`)
-	if got := navOf(t, body); got != "Locations" {
-		t.Errorf("NAV-1: current = %q, want Locations", got)
-	}
+	wantContains(t, body, "<h1>Locations</h1>")
+	wantNoNav(t, body)
 }
 
-// NAV-1: the sessions list is at /sessions and marks Sessions.
+// NAV-1, UI-5: the sessions list is still served at /sessions, with no nav.
 func TestRoutes_NAV1_SessionsList(t *testing.T) {
 	e := newEnv(t)
 	e.mockup("CP-01")
@@ -682,9 +707,7 @@ func TestRoutes_NAV1_SessionsList(t *testing.T) {
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
 	wantContains(t, body, "<h1>Charging sessions</h1>", "CP-01")
-	if got := navOf(t, body); got != "Sessions" {
-		t.Errorf("NAV-1: current = %q, want Sessions", got)
-	}
+	wantNoNav(t, body)
 }
 
 // NAV-1: /locations answers 301 to / for GET (with or without a query) and HEAD.
@@ -710,7 +733,8 @@ func TestRoutes_NAV1_LocationsRedirects(t *testing.T) {
 	}
 }
 
-// NAV-1: the detail page and its errors mark Sessions and link back to /sessions.
+// NAV-1, UI-5: the detail page of a simulated session and the errors link
+// back to /sessions; none of them has a nav, even when the database fails.
 func TestRoutes_NAV1_CurrentOnDetailAndErrors(t *testing.T) {
 	e := newEnv(t)
 	id := e.mockup("CP-01")
@@ -719,23 +743,14 @@ func TestRoutes_NAV1_CurrentOnDetailAndErrors(t *testing.T) {
 	notFound := e.get("/sessions/not-a-uuid")
 	wantHTML(t, notFound, http.StatusNotFound)
 	wantContains(t, notFound.Body.String(), `<a href="/sessions">Back to all sessions</a>`)
-	for name, body := range map[string]string{"detail": detail, "404": notFound.Body.String()} {
-		if got := navOf(t, body); got != "Sessions" {
-			t.Errorf("NAV-1: %s current = %q, want Sessions", name, got)
-		}
-	}
+	wantNoNav(t, detail)
+	wantNoNav(t, notFound.Body.String())
 
-	// A failure on a /sessions page marks Sessions; on the home page, nothing.
+	// A failure shows the error page, without a nav either.
 	e.pool.Close()
-	if got := navOf(t, e.get("/sessions").Body.String()); got != "Sessions" {
-		t.Errorf("NAV-1: sessions 500 current = %q, want Sessions", got)
-	}
-	if got := navOf(t, e.get("/sessions/"+id).Body.String()); got != "Sessions" {
-		t.Errorf("NAV-1: detail 500 current = %q, want Sessions", got)
-	}
-	if got := navOf(t, e.get("/").Body.String()); got != "" {
-		t.Errorf("NAV-1: home 500 current = %q, want none", got)
-	}
+	wantNoNav(t, e.get("/sessions").Body.String())
+	wantNoNav(t, e.get("/sessions/"+id).Body.String())
+	wantNoNav(t, e.get("/").Body.String())
 }
 
 // VIEW-7: the first link in the body skips to <main id="content">.
@@ -749,6 +764,24 @@ func TestLayout_VIEW7_SkipLink(t *testing.T) {
 			t.Errorf("VIEW-7: %s: first link in body is not the skip link: %.200s", path, after[i:])
 		}
 		wantContains(t, body, `<main id="content">`)
+	}
+}
+
+// UI-3: every page inlines the built stylesheet in its <style> and links no
+// stylesheet, since the CSP allows inline styles only.
+func TestLayout_UI3_InlinesStylesheet(t *testing.T) {
+	if !strings.HasPrefix(appCSS, "/*! tailwindcss") {
+		t.Fatalf("UI-3: embedded app.css is not a Tailwind build: %.40q", appCSS)
+	}
+	e := newEnv(t)
+	for _, path := range []string{"/", "/sessions", "/sessions/not-a-uuid"} {
+		body := e.get(path).Body.String()
+		if strings.Count(body, "<style>") != 1 || !strings.Contains(body, "<style>"+appCSS+"</style>") {
+			t.Errorf("UI-3: %s does not inline app.css in one <style>", path)
+		}
+		if strings.Contains(body, "<link") {
+			t.Errorf("UI-3: %s links a resource; styles must be inline", path)
+		}
 	}
 }
 
@@ -817,24 +850,21 @@ func TestList_NAV2_Site(t *testing.T) {
 	rec := e.get("/sessions?site=038983")
 	wantHTML(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	// NAV-2: the h1 names the site, followed by the link to every site.
-	wantContains(t, body, "<h1>Sessions at MARINA SQUARE</h1>\n"+`<p class="scope"><a href="/sessions">Show all sites</a></p>`,
+	// NAV-2, UI-5: the h1 names the site, with no link to every site: the
+	// visitor came from that site's card and goes back through Locations.
+	wantContains(t, body, "<h1>Sessions at MARINA SQUARE</h1>\n<p class=\"notice\">",
 		"<title>Sessions at MARINA SQUARE · EV billing</title>",
 		`<caption class="vh">Sessions at MARINA SQUARE</caption>`, "1 on this page · 1 in all",
 		`<body data-stream="view=list&amp;site=038983">`)
 	if sessionRows(body) != 1 || strings.Contains(body, "ELSE-1") || strings.Contains(body, `class="source simulated"`) {
 		t.Errorf("NAV-2: site filter shows other sessions: %s", body)
 	}
-	if got := navOf(t, body); got != "Sessions" {
-		t.Errorf("NAV-1: current = %q, want Sessions", got)
-	}
+	wantNoNav(t, body)
 
 	rec = e.get("/sessions?site=000000")
 	wantHTML(t, rec, http.StatusNotFound)
 	wantContains(t, rec.Body.String(), "No watched site has postal code 000000.", `<a href="/sessions">Show all sessions</a>`)
-	if got := navOf(t, rec.Body.String()); got != "Sessions" {
-		t.Errorf("NAV-1: 404 current = %q, want Sessions", got)
-	}
+	wantNoNav(t, rec.Body.String())
 
 	for _, bad := range []string{"abc", "12345", "%3Cscript%3E"} {
 		rec = e.get("/sessions?site=" + bad)
@@ -846,13 +876,9 @@ func TestList_NAV2_Site(t *testing.T) {
 				t.Errorf("NAV-2: site=%s echoes %q", bad, echo)
 			}
 		}
-		if got := navOf(t, body); got != "Sessions" {
-			t.Errorf("NAV-1: 400 current = %q, want Sessions", got)
-		}
+		wantNoNav(t, body)
 	}
 
-	wantContains(t, e.get("/sessions?site=038983&sort=energy&dir=asc").Body.String(),
-		`<p class="scope"><a href="/sessions?sort=energy&amp;dir=asc">Show all sites</a></p>`)
 	if body := e.get("/sessions").Body.String(); !strings.Contains(body, "<h1>Charging sessions</h1>") || strings.Contains(body, "Show all sites") {
 		t.Errorf("NAV-2: unfiltered list has the wrong h1 or a site link")
 	}
@@ -929,9 +955,7 @@ func TestList_NAV4_BadCursorIs400(t *testing.T) {
 		if strings.Contains(body, "evil-cursor") {
 			t.Errorf("NAV-4: %s echoes the cursor", path)
 		}
-		if got := navOf(t, body); got != "Sessions" {
-			t.Errorf("NAV-1: current = %q, want Sessions", got)
-		}
+		wantNoNav(t, body)
 	}
 }
 
@@ -998,10 +1022,9 @@ func TestList_VIEW1_VIEW2_Labels(t *testing.T) {
 	if got := statusLabel(sessions.SourceAPI, sessions.StatusCharging); got != "charging" {
 		t.Errorf("VIEW-2: api charging = %q", got)
 	}
-	for _, st := range []string{sessions.StatusStale, sessions.StatusCompleted} {
-		if got := statusLabel(sessions.SourceMirror, st); got != st {
-			t.Errorf("VIEW-2: mirror %s = %q", st, got)
-		}
+	// Stale reads "no recent update" since UI-6 (TestStatusLabel_VIEW2_UI6).
+	if got := statusLabel(sessions.SourceMirror, sessions.StatusCompleted); got != sessions.StatusCompleted {
+		t.Errorf("VIEW-2: mirror completed = %q", got)
 	}
 
 	// Simulated sessions only: no estimate anywhere in the figures.
@@ -1246,7 +1269,7 @@ func TestDetail_VIEW4_StaleStoppedText(t *testing.T) {
 	e.reading(id, sgt(12, 10, 6), 8333)
 	e.p.Now = func() time.Time { return sgt(12, 40, 6) } // 30 min without a reading
 	body := e.get("/sessions/" + id).Body.String()
-	wantContains(t, body, "<dt>Stopped</dt><dd>not stopped</dd>", "stale")
+	wantContains(t, body, "<dt>Stopped</dt><dd>not stopped</dd>", `<span class="badge stale">no recent update</span>`)
 	if strings.Contains(body, "still charging") {
 		t.Error("VIEW-4: a stale session still reads still charging")
 	}
