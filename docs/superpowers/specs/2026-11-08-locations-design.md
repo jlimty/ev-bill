@@ -11,7 +11,7 @@ A new page, served at `/` (NAV-1 in the home-and-sessions design), answers it fo
 - **when in the day** the chargers are busy, against our peak and off-peak windows;
 - **what is happening right now**, connector by connector.
 
-Money appears only as a clearly labelled estimate at the operator's posted price.
+Money appears only as a clearly labelled estimate at our 62/48 tariff, matching the site's sessions page (LOC-6, amended 2026-11-09). The operator's posted price is not shown here; the site's sessions page gives it in each charger's line for reference.
 
 The audience is engineers first, with numbers framed so that someone who runs charging sites would find them credible (see PRODUCT.md). A viewer should leave confident of two things: the system is live, and the utilization figures are trustworthy.
 
@@ -20,12 +20,12 @@ The audience is engineers first, with numbers framed so that someone who runs ch
 - Per-location utilization over a rolling 14-day window, from observed occupancy and never from estimates.
 - A 24-hour profile per location: utilization by hour of day (Singapore time), coloured by tariff window.
 - Live per-connector state (busy, free, out of service) that updates without a reload.
-- Estimated energy and estimated value at the operator's posted price, labelled as estimates.
+- Estimated energy and cost at our tariff, labelled as estimates, equal to the site drill-down's totals (LOC-6, amended 2026-11-09).
 - Works on a phone. Fits the existing visual system. No chart library, and the CSP is unchanged.
 
 ## Non-goals
 
-- Billing at the operator's price. Sessions are still billed at the BIL-2 tariff, and the posted price is used only for the estimate on this page.
+- Billing at the operator's price. Sessions are billed at the BIL-2 tariff; the posted price is shown only in the site drill-down's charger lines, never on this page or in a total. The feed has only today's price and no history.
 - Per-connector history pages, forecasts, or comparisons between operators.
 - History older than the window, or daily rollups kept beyond 14 days.
 - A chart library or any JS framework (AGENTS.md rule kept).
@@ -54,8 +54,8 @@ The audience is engineers first, with numbers framed so that someone who runs ch
 - **A vendored chart library.** Rejected: 24 bars don't need one, and it would break the no-framework rule.
 
 **Money**
-- **Estimated energy × operator's posted price (chosen by the user).** It is the realistic figure, because our tariff is not an operator's price.
-- **Our demo tariff.** Rejected as commercially meaningless.
+- **Estimated energy × operator's posted price (chosen by the user, 2026-11-08; superseded 2026-11-09).** It did not reconcile with the site's sessions page, which bills at our tariff, and applied today's price to the whole window.
+- **Our tariff (chosen 2026-11-09).** The card's money equals its drill-down's, at the price the app actually bills; the posted price stays visible in the site drill-down's charger lines.
 
 ## Rules (LOC)
 
@@ -87,16 +87,13 @@ The audience is engineers first, with numbers framed so that someone who runs ch
   - A text count sits beside each grid: "9 busy · 17 free · 2 out".
   - Each cell's hover label gives the charger ID, kW, AC/DC, plug type and state.
   - The page shows the age of that state using the same feed line as the sessions page (LIVE-4).
-- **LOC-6 Sessions, energy and estimated value.** Per location, over the same window: sessions count only if they started at or after that site's first sample in the window, so nothing from before observation began is included.
-  - **Billing sessions:** the number of mirror sessions started in the window at that location's chargers. The label says "billing sessions", because a gap or the 48 h limit can split one car's stay into more than one (MIR-5, MIR-12).
-  - **Est. energy:** the sum of each session's energy (last meter − start meter).
-  - **Est. value at posted price:** the sum over sessions of round-half-up(Wh × price ÷ 100,000) cents, where price is the charger's current posted price in ten-thousandths of a dollar per kWh. For example `"0.6976"` = 6976, which is 69.76¢/kWh.
-  - **Price parsing:** strict decimals with at most 4 places, non-negative, at most $100/kWh, no floats.
-    - `priceType "kWh"` is per kWh.
-    - `priceType "free"` counts as 0.
-    - Any other `priceType`, including `""` and `$/h`, is treated as unknown.
-    - An unknown type, or an empty or unparseable price, leaves that session out of the value, and the page notes "price n/a for N sessions".
-  - The label reads "est. value at today's posted price", because the current price is applied to the whole window.
+- **LOC-6 Site totals (replaced 2026-11-09 by `2026-11-09-site-reconcile-design.md`).** A card's facts line covers exactly the sessions NAV-2's site filter lists: every stored `mirror` session whose charger has a `chargers` row with that postal code, with no separate time filter (retention, MIR-9, bounds it to 14 days). That includes chargers no longer in the current scope.
+  - **Billing sessions:** the number of those sessions. The label says "billing sessions", because a gap or the 48 h limit can split one car's stay into more than one (MIR-5, MIR-12).
+  - **Energy and cost:** each session billed exactly as the session list bills it (`sessions.BuildView` at the same tariff and the same now, so open sessions agree too), summed.
+  - **Copy:** "7 billing sessions · 205.6 kWh est. · $114.18 est.". The card names no tariff: the header's tariff key and the notice below the cards do, and the drill-down's count line repeats it.
+  - **Posted price:** not shown on this page (revised 2026-11-09). It appears only at the end of each row's charger line on the site drill-down (NAV-2 in the home-and-sessions design), from that row's charger, and never in a total.
+  - **Price parsing:** strict decimals with at most 4 places, non-negative, at most $100/kWh, no floats. `priceType "kWh"` is per kWh, `"free"` is 0, and any other type, including `""` and `$/h`, is unknown.
+- **LOC-8 Observing since (added 2026-11-09).** Each card, and the site drill-down under its heading, shows when the app began watching the site: "Observing since 8 Nov, 16:50" (Asia/Singapore, with the year when it is not the current one), from the earlier of the site's first stored occupancy sample and its first stored session. Once that is 14 days old within LOC-4's window slack (1 h), it reads "Last 14 days". A site with neither has no line. LTA's feed has no history, so nothing before this point exists.
 - **LOC-7 Page.**
   - `GET /` serves the page (NAV-1 in the home-and-sessions design), and `/locations` answers 301 to `/`. It is public, and is the first link in the header nav.
   - It updates live through the existing `/events` stream with a new view `locations`, sharing renders through the render cache, on every mirror change and the 30 s refresh.
@@ -117,7 +114,8 @@ The audience is engineers first, with numbers framed so that someone who runs ch
      - the connector grid with its text count;
      - utilization as the card's largest number, labelled "observed";
      - the 24-hour strip with hour ticks at 00, 06, 12, 18 and 23;
-     - the facts line: sessions · est. energy · est. value at today's posted price.
+     - an observing line under the name (LOC-8);
+     - the facts line: billing sessions · energy est. · cost est. at our tariff (LOC-6).
   4. The legends sit as VIEW-5 says: a compact cell legend above the first card and the tariff swatches beside each strip's caption. The estimate notice follows the cards.
 - **Focal moment:** the gap between a card's utilization number and its mostly empty grid.
 - **Visual system:** inherit the `layout.html` tokens: `--peak`/`--off` for tariff bars, existing card, badge and type scale, with no new brand colours.
@@ -139,7 +137,7 @@ The audience is engineers first, with numbers framed so that someone who runs ch
 
 ## Changes to earlier specs
 
-- **Live-mirror non-goals:** "comparing the operator's posted price with our tariff" becomes "billing at the operator's price". The posted price may be shown as a labelled estimate (LOC-6).
+- **Live-mirror non-goals:** "comparing the operator's posted price with our tariff" becomes "billing at the operator's price". The posted price may be shown only as a labelled fact in the site drill-down's charger lines (LOC-6, amended 2026-11-09).
 - **MIR-9:** retention also deletes occupancy samples older than 14 days.
 - **LIVE-1:** the stream accepts a third view, `locations`.
 - **README and playbook:** they gain the Locations page and how its numbers are computed.
@@ -154,7 +152,8 @@ The audience is engineers first, with numbers framed so that someone who runs ch
 - **LOC-1:** a sample is written once per applied snapshot, a retried cycle doesn't double-count, a repeated feed writes nothing, and retention deletes old samples.
 - **LOC-4:** with no sufficient site there's no headline. Sufficient sites sort ascending and come before the "collecting" sites, and "n/a" sites sort last. A newly added site doesn't hide the headline. The pooled headline differs from the average of the sites' percentages when site sizes differ.
 - **LOC-5:** muted cells and an "as of" count when the mirror is off or the feed is stale. A removed postal code drops its card. A location missing from a snapshot gets no sample.
-- **LOC-6:** price parsing (table-driven: `"0.6976"`, `"0.70"`, `"free"`, `""`, `"abc"`, `"-1"`, `"0.12345"`, `"101"`, plus `priceType` `""` and `"$/h"` with a numeric price → n/a), value rounding, the n/a note, and integer-only arithmetic.
+- **LOC-6:** price parsing (table-driven: `"0.6976"`, `"0.70"`, `"free"`, `""`, `"abc"`, `"-1"`, `"0.12345"`, `"101"`, plus `priceType` `""` and `"$/h"` with a numeric price → n/a), no posted price on the page, site totals equal to the drill-down's (one page, many pages, an open session, an out-of-scope charger, API sessions left out), and integer-only arithmetic.
+- **LOC-8:** the earlier of first sample and first session, the "Last 14 days" switch at the window slack, the year form, and no line with no observation; under `make test-tz`.
 - **LOC-5/7 page tests:** state counts, a legend that isn't colour-only, the empty state, and the exact copy.
 - **e2e:** the Locations page updates without a reload when a connector changes state, with zero console errors or CSP violations.
 
@@ -167,7 +166,7 @@ The audience is engineers first, with numbers framed so that someone who runs ch
 - A `priceType` other than `kWh` or `free` is treated as unknown (LOC-6).
 - "Billing sessions" in the label instead of "sessions" (LOC-6).
 - Out-of-service connectors excluded from capacity (LOC-2).
-- Today's posted price applied to the whole window (LOC-6), labelled as such.
+- The posted price is a fact in the site drill-down's charger lines only, never on this page or in a total (LOC-6, 2026-11-09).
 - Peak hours for the strip colouring are 07:00–22:59, matching BIL-2's 07:00–23:00.
 - `/locations` as a separate page rather than a section of the sessions list.
 - Muting also applies until the first successful poll after a restart, so states stored before the restart are never shown as current (LOC-5, from the whole-branch review).

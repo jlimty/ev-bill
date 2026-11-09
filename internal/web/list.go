@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/jlimty/ev-bill/internal/mirror"
 	"github.com/jlimty/ev-bill/internal/reqid"
@@ -39,6 +40,7 @@ type sortHeader struct {
 type listPage struct {
 	layoutData
 	Heading                string
+	Observing              string // on a site filter, when observation began (LOC-8)
 	Notice                 string
 	Feed                   feedLine
 	FirstPage              string
@@ -138,7 +140,7 @@ func (p *Pages) listData(ctx context.Context, q listQuery) (listPage, error) {
 		Notice:     listNotice,
 		Caption:    "Sessions",
 		Empty:      "No sessions yet. Sessions appear here as soon as a charger starts one.",
-		CostHeader: "Cost (" + tariffName(p.Tariff) + " tariff)",
+		CostHeader: "Cost (our " + tariffName(p.Tariff) + " tariff)",
 		Rows:       []listRow{},
 	}
 	if q.Site != "" {
@@ -198,6 +200,11 @@ func (p *Pages) listData(ctx context.Context, q listQuery) (listPage, error) {
 		}
 		if c := it.Charger; c != nil && showsCharger(it.Session) {
 			row.Where = joinNonEmpty(" · ", c.LocationName, c.Operator, chargerPower(c))
+			if q.Site != "" {
+				// NAV-2: on a site's drill-down the charger's posted price
+				// today ends its line, as a fact about the charger.
+				row.Where = joinNonEmpty(" · ", row.Where, chargerPrice(c))
+			}
 		}
 		data.Rows = append(data.Rows, row)
 		energyWh += v.Bill.EnergyWh
@@ -214,6 +221,11 @@ func (p *Pages) listData(ctx context.Context, q listQuery) (listPage, error) {
 	if page.Total > 0 {
 		data.Count = groupThousands(int64(n)) + " on this page · " + groupThousands(page.Total) + " in all"
 		data.Empty = "No sessions on this page."
+	}
+	if q.Site != "" {
+		if err := p.siteCount(ctx, &data, q.Site, now, n, page.HasPrev || page.HasNext); err != nil {
+			return listPage{}, err
+		}
 	}
 	data.HasPrev = page.HasPrev
 	switch {
@@ -246,4 +258,31 @@ func (q listQuery) sortHeader(col store.SessionSort) sortHeader {
 		h.Sort = "descending"
 	}
 	return h
+}
+
+// siteCount sets a site filter's count line and observing line (NAV-2,
+// LOC-8): the site's totals over every page, billed as its Locations card
+// bills them at the same now, then "· 50 on this page" when the filter spans
+// more than one page. With no session at the site the count line stays empty,
+// as the empty state already says so.
+func (p *Pages) siteCount(ctx context.Context, data *listPage, site string, now time.Time, n int, paged bool) error {
+	act, err := p.Store.SiteActivity(ctx, []string{site})
+	if err != nil {
+		return err
+	}
+	a := act[site]
+	data.Observing = p.observingLine(now, observingStart(a))
+	totals, err := billSite(a.Sessions, p.Tariff, now)
+	if err != nil {
+		return err
+	}
+	if totals.Sessions == 0 {
+		data.Count = ""
+		return nil
+	}
+	data.Count = totalsLine(totals, "session in all", "sessions in all") + " at our " + tariffName(p.Tariff) + " tariff"
+	if paged {
+		data.Count += " · " + groupThousands(int64(n)) + " on this page"
+	}
+	return nil
 }

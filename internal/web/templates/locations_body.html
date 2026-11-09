@@ -10,7 +10,7 @@
 </ul>
 {{range .Sites}}<article class="site" data-key="{{.Postal}}">
 <div class="head">
-<div><h2>{{.Name}}</h2><p class="sub">{{.Sub}}</p></div>
+<div><h2>{{.Name}}</h2><p class="sub">{{.Sub}}</p>{{with .Observing}}<p class="sub observing">{{.}}</p>{{end}}</div>
 <p class="util"><span class="pct" data-watch>{{.Util}}</span>{{with .UtilLabel}}<span class="vh">&nbsp;·&nbsp;</span><span class="label">{{.}}</span>{{end}}</p>
 </div>
 <ul class="cells{{if .Muted}} muted{{end}}" aria-hidden="true">

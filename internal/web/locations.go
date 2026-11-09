@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/jlimty/ev-bill/internal/billing"
@@ -30,8 +29,7 @@ const emptyLocations = "Live mirror off · no location data yet"
 func locationsNotice(t billing.Tariff) string {
 	return "Utilization is observed from LTA occupancy, over the time the feed was watched; " +
 		`"busy" includes reserved connectors. Energy is an estimate at rated power (DC capped at ` +
-		FormatKW(mirror.DCMaxW) + "), and value is that estimate at each charger's posted price today, applied to the whole window " +
-		"(the operator's price, not the " + tariffName(t) + " billing tariff)."
+		FormatKW(mirror.DCMaxW) + "), and cost is that estimate at our " + tariffName(t) + " tariff."
 }
 
 // locationsPage is the Locations page and its live section (LOC-4, LOC-5,
@@ -58,6 +56,7 @@ type siteCard struct {
 	NoData            bool   // some hour of the strip has no data, so the strip shows the no-data key (UI-4)
 	HoursLine         string // busiest and quietest hours, for a sufficient site (VIEW-5)
 	Link              string // the site's sessions (NAV-2)
+	Observing         string // when observation began (LOC-8)
 	Facts, Collecting string
 }
 
@@ -110,6 +109,14 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 		return locationsPage{}, err
 	}
 	aggs, err := p.Store.Locations(ctx, now.Add(-locations.Window))
+	if err != nil {
+		return locationsPage{}, err
+	}
+	postals := make([]string, len(aggs))
+	for i, a := range aggs {
+		postals[i] = a.PostalCode
+	}
+	activity, err := p.Store.SiteActivity(ctx, postals)
 	if err != nil {
 		return locationsPage{}, err
 	}
@@ -166,7 +173,11 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 		lead = "As of " + p.asOf(now, newest) + ": "
 	}
 	for _, s := range locations.Order(sites) {
-		data.Sites = append(data.Sites, p.siteCard(byPostal[s.PostalCode], muted, lead, windowHours, maxHours))
+		c, err := p.siteCard(now, byPostal[s.PostalCode], activity[s.PostalCode], muted, lead, windowHours, maxHours)
+		if err != nil {
+			return locationsPage{}, err
+		}
+		data.Sites = append(data.Sites, c)
 	}
 	return data, nil
 }
@@ -196,33 +207,29 @@ func (p *Pages) windowLine(now, earliest time.Time, maxHours int64) (line string
 
 // siteCard builds one location's card: its connector grid and count (LOC-5),
 // utilization (LOC-2), hourly strip (LOC-3), hours line, collecting note
-// (LOC-4), facts line (LOC-6) and link to its sessions (VIEW-5). The window
-// line's own hours (windowHours, maxHours) decide whether the collecting note
-// would only repeat it.
-func (p *Pages) siteCard(a store.LocationAggregate, muted bool, lead string, windowHours bool, maxHours int64) siteCard {
+// (LOC-4), observing line (LOC-8), facts line (LOC-6) and link to its sessions
+// (VIEW-5). The facts are the site's sessions billed as its drill-down bills
+// them, at the same now. The window line's own hours (windowHours, maxHours)
+// decide whether the collecting note would only repeat it.
+func (p *Pages) siteCard(now time.Time, a store.LocationAggregate, act store.SiteActivity, muted bool, lead string, windowHours bool, maxHours int64) (siteCard, error) {
 	hours := locations.ObservedHours(a.Samples)
-	facts := []string{
-		plural(a.Sessions, "billing session", "billing sessions"),
-		"est. " + FormatWh(a.EnergyWh),
+	totals, err := billSite(act.Sessions, p.Tariff, now)
+	if err != nil {
+		return siteCard{}, err
 	}
-	if a.PriceNASessions > 0 {
-		facts = append(facts, "price n/a for "+plural(a.PriceNASessions, "session", "sessions"))
-	}
-	// The price basis is named here, where the money is shown; the notice
-	// below the cards says it is the operator's price, not our tariff (UI-4).
-	facts = append(facts, "est. "+FormatCents(a.ValueCents)+" at posted prices")
 	sub := []string{joinNonEmpty(", ", a.Operators...), plural(int64(len(a.Chargers)), "connector", "connectors")}
 	for _, n := range a.Also {
 		sub = append(sub, "also "+n)
 	}
 	c := siteCard{
-		Name:   a.Name,
-		Postal: a.PostalCode,
-		Sub:    joinNonEmpty(" · ", sub...),
-		Muted:  muted,
-		Util:   "n/a",
-		Link:   "/sessions?site=" + a.PostalCode,
-		Facts:  strings.Join(facts, " · "),
+		Name:      a.Name,
+		Postal:    a.PostalCode,
+		Sub:       joinNonEmpty(" · ", sub...),
+		Muted:     muted,
+		Util:      "n/a",
+		Link:      "/sessions?site=" + a.PostalCode,
+		Observing: p.observingLine(now, observingStart(act)),
+		Facts:     totalsLine(totals, "billing session", "billing sessions"),
 	}
 	if bp, ok := locations.UtilizationBP(a.Occupied, a.Available); ok {
 		c.Util = fmt.Sprintf("%d%%", locations.PercentFromBP(bp))
@@ -243,7 +250,7 @@ func (p *Pages) siteCard(a store.LocationAggregate, muted bool, lead string, win
 		c.NoData = c.NoData || bar.Class == "nodata"
 		c.Hours = append(c.Hours, bar)
 	}
-	return c
+	return c, nil
 }
 
 // cells builds the connector grid and its text count (LOC-5): "9 busy · 17

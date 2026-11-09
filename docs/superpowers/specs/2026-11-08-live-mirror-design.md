@@ -22,7 +22,7 @@ The audience is technical: people judging the Go architecture and the delivery p
 
 - Mirroring all ~11,800 connectors.
 - A map, or any JS framework.
-- Billing at the operator's price. The feed's price field is recorded, but not used in billing. The Locations page may show it only as a labelled estimate (LOC-6 in the Locations design).
+- Billing at the operator's price. The feed's price field is recorded, but not used in billing or in any total. The Locations page shows it only as a plain, labelled fact (LOC-6 in the Locations design, amended 2026-11-09). The feed gives only today's price, and the app keeps no price history.
 - Backfilling history from before the app started, or from while it was down.
 - Accurate energy. The feed has no kWh, so energy is an estimate (MIR-4).
 - Running more than one server instance.
@@ -139,6 +139,7 @@ Sleep is still handled correctly (MIR-5), because deploys, restarts and feed out
   - The CSP becomes `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`.
   - Without JS, a `<noscript>` meta refresh reloads the page every 30 s (VIEW-6).
 - **LIVE-4 Page content.**
+  - **Footer freshness (2026-11-09):** a streaming page's footer says how fresh charger data is, not that it is live: "Charger status is fetched from LTA every 5 minutes, so it can be up to 10 minutes old; this page refreshes itself when it changes." The figures come from the poll interval (MIR-1) and LTA's 5-minute publish cycle. A page that does not stream says only which time zone it uses.
   - **Tariff header:** peak and off-peak windows and rates. (UI-4 in the original spec: a swatch key, "Peak 07–23 · 62¢/kWh", that also keys the charts.)
   - **Boundary labels** on the bar's time axis (VIEW-4), which replace the bar's legend.
   - **Feed status line:** "Live from LTA DataMall · last update 13:45 (2 min ago)". It turns into a warning when the last good poll is more than 15 min old, and says "Mirror off" when no key is configured.

@@ -141,7 +141,7 @@ At startup and then every 5 minutes, `datamall` fetches the EV charging batch fi
 | `internal/web` | Status pages rendered with `html/template` and styled with Tailwind CSS (built into `static/app.css`, inlined), the `/events` stream and `/static/live.js` |
 | `internal/datamall` | DataMall client (link, then file download) and feed parser; integer watts, no floats |
 | `internal/mirror` | Poller, planner, reconciler, occupancy samples and retention job for the live mirror |
-| `internal/locations` | Pure utilization, price parsing, estimated value, site ordering and headline for the Locations page; integers only |
+| `internal/locations` | Pure utilization, posted-price parsing (for the drill-down's charger lines), site ordering and headline for the Locations page; integers only |
 | `internal/live` | Hub that fans "changed" signals out to streams, the 30 s ticker, and the feed status |
 | `internal/server` | Top-level handler: request logging, `/healthz`, graceful serve |
 | `internal/reqid` | Carries the request ID through the request context |
@@ -213,11 +213,11 @@ The contract is [`api/openapi.yaml`](api/openapi.yaml); handler tests validate r
 
 Status pages: `/` (Locations, see [Locations](#locations)), `/sessions` (filtered by site, sorted and paged) and `/sessions/{id}` (segment bar and table). `/locations` redirects to `/`. They update live over `GET /events` (Server-Sent Events); without JavaScript a `<noscript>` meta refresh reloads every 30 s.
 
-The pages have no nav menu: they are a drill-down. "EV billing" in the header goes to Locations; each site card links to that site's sessions (`/sessions?site=<postal>`); each session links back to its site's list. Simulated sessions have no site, so they appear only in the unfiltered `/sessions` list, which a simulated session's back link and the error pages lead to. The header's tariff key (peak and off-peak swatches with their hours and rates) is the colour key for every chart. A session with no reading for 15 minutes is labelled "no recent update" (status `stale` in the API).
+The pages have no nav menu: they are a drill-down. "EV billing" in the header goes to Locations; each site card links to that site's sessions (`/sessions?site=<postal>`), whose count line repeats the card's totals; each session links back to its site's list. Simulated sessions have no site, so they appear only in the unfiltered `/sessions` list, which a simulated session's back link and the error pages lead to. The header's tariff key (peak and off-peak swatches with their hours and rates) is the colour key for every chart. A session with no reading for 15 minutes is labelled "no recent update" (status `stale` in the API).
 
 ## Live mirror
 
-The server can mirror real charger occupancy from LTA DataMall's EV charging feed into billed sessions. It polls once at startup and then every 5 minutes. For each watched connector that the feed reports as occupied, it opens a `mirror` session and adds a reading at every poll; when the connector frees, it stops the session. The pages label each row `mirror` or `simulated`, and show a feed status line with the time of the last update.
+The server can mirror real charger occupancy from LTA DataMall's EV charging feed into billed sessions. It polls once at startup and then every 5 minutes. For each watched connector that the feed reports as occupied, it opens a `mirror` session and adds a reading at every poll; when the connector frees, it stops the session. The pages label each row `mirror` or `simulated`, and show a feed status line with the time of the last update. LTA republishes its file every 5 minutes too, so charger status can be up to 10 minutes old; the footer says so, and the pages redraw themselves as soon as a poll brings a change.
 
 The feed has no energy data, so energy and cost for mirrored sessions are estimates (MIR-4):
 
@@ -252,7 +252,7 @@ The first poll runs at startup; the feed line on http://localhost:8080/ shows th
 
 ## Locations
 
-`/` shows whether public charging at the watched sites is under-used. It has one card per site in the newest feed observation, and updates live over `/events?view=locations`. Rules LOC-1..7 are in the [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md).
+`/` shows whether public charging at the watched sites is under-used. It has one card per site in the newest feed observation, and updates live over `/events?view=locations`. Rules LOC-1..8 are in the [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md), amended by the [site reconcile design](docs/superpowers/specs/2026-11-09-site-reconcile-design.md).
 
 Observed figures come straight from LTA's occupancy data:
 
@@ -261,14 +261,18 @@ Observed figures come straight from LTA's occupancy data:
 - **The connector grid** shows each connector's latest state: busy (solid blue), free (green outline) or out of service (grey hatch), with a text count beside it. When the mirror is off, the feed is delayed, or no update has arrived since startup, busy cells fade to pale blue inside their blue edge and the count reads "as of HH:MM", with the date when that is not today.
 - **The headline** pools busy and free time across the sites that have enough data, so larger sites weigh more. It is not an average of the sites' percentages.
 
-**Billing sessions** count the mirror sessions started in the window at a site's chargers. The count is not an estimate. A gap or the 48 h limit can split one car's stay into more than one, hence "billing sessions".
+**Billing sessions** are the same sessions the site's drill-down (`/sessions?site=<postal>`) lists: every stored mirror session at that postal code's chargers. The count is not an estimate. A gap or the 48 h limit can split one car's stay into more than one, hence "billing sessions".
 
 Estimated figures are labelled "est.":
 
-- **Est. energy** is those sessions' estimated energy (rated power, see [Live mirror](#live-mirror)).
-- **Est. value** is each session's energy at its charger's posted price today, applied to the whole window. A charger whose price type is not per kWh or free has no usable price, so its sessions are left out and counted as "price n/a".
+- **Energy** is those sessions' estimated energy (rated power, see [Live mirror](#live-mirror)).
+- **Cost** is each session billed at our 62/48 tariff, exactly as the drill-down bills it, so the card and the drill-down's count line ("7 sessions in all · 205.6 kWh est. · $114.18 est. at our 62/48 tariff") always agree, across every page of the list and for open sessions too.
 
-The window is the last 14 days, or since the first sample when that is later ("Since 8 Nov · 31 h observed"). Each site's utilization, sessions, energy and value share its window, so a site with no samples yet shows 0 billing sessions. A site needs 288 samples (24 h observed) before it is ranked or counted in the headline. Until then it shows "collecting data · N h" and follows the ranked sites, which are ordered least used first.
+The Locations page does not show the operator's posted price. On a site's drill-down, each session's charger line ends with it ("… · 50 kW DC · posted $0.6976/kWh", "posted free" or "posted price n/a"), as a fact about that charger. It never enters a total, because LTA's feed gives only today's price and the app keeps no price history.
+
+**Observing since.** LTA's feed has no history, so every figure starts when the app began watching a site. Each card, and its drill-down, says so: "Observing since 8 Nov, 16:50", from the earlier of the site's first occupancy sample and its first session, or "Last 14 days" once 14 days are held (retention deletes anything older).
+
+The page's window line covers utilization: the last 14 days, or since the first sample when that is later ("Since 8 Nov · 31 h observed"). A site needs 288 samples (24 h observed) before it is ranked or counted in the headline. Until then it shows "collecting data · N h" and follows the ranked sites, which are ordered least used first.
 
 ## Quality gates
 
@@ -307,10 +311,11 @@ Free-tier limits (Render's free-tier terms as of November 2026):
 
 - [Spec](docs/superpowers/specs/2026-11-07-ev-billing-design.md): rule IDs (BIL, SES, API, UI, OPS)
 - [Plan](docs/superpowers/plans/2026-11-07-ev-billing.md)
-- [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md): rule IDs LOC-1..7 (occupancy samples, utilization, hourly profile, data sufficiency, live connector state, sessions and estimated value, the page)
+- [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md): rule IDs LOC-1..8 (occupancy samples, utilization, hourly profile, data sufficiency, live connector state, site totals, the page, observing since)
 - [Live mirror spec](docs/superpowers/specs/2026-11-08-live-mirror-design.md): rule IDs MIR-1..12 (poller, scope, observation time, energy estimate, gaps, reconciliation, coexistence with API sessions, charger details, retention, config, lifecycle, occupancies past 48 h) and LIVE-1..4 (event stream, hub, pushed content, page content)
 - [Live mirror plan](docs/superpowers/plans/2026-11-08-live-mirror.md)
 - [Locations plan](docs/superpowers/plans/2026-11-08-locations.md)
+- [Site reconcile design](docs/superpowers/specs/2026-11-09-site-reconcile-design.md) and [plan](docs/superpowers/plans/2026-11-09-site-reconcile.md)
 - [PRODUCT.md](PRODUCT.md): who the pages are for and the product principles
 - [AGENTS.md](AGENTS.md): constraints and rules for coding agents
 - [Delivery playbook](docs/playbook.md)

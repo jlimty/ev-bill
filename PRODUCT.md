@@ -26,7 +26,7 @@ The service bills real Singapore chargers, observed every 5 minutes from LTA Dat
 ## Capabilities and Constraints
 - **Watched sites:** postal codes 038983 (GV Suntec City), 519612 (Pasir Ris Mall) and 090032 (Blk 29/32 Telok Blangah Rise HDB car park), 68 connectors in all.
 - **What the feed gives per connector:** occupancy status (occupied, available or not available, where occupied includes reserved and blocked), rated kW, AC/DC, plug type, operator, and the posted price including GST.
-- **Estimates:** energy is estimated at rated power, with DC capped at 50 kW and 60 kWh per occupancy. Money shown on the Locations page is estimated energy × the operator's posted price.
+- **Estimates:** energy is estimated at rated power, with DC capped at 50 kW and 60 kWh per occupancy. Money shown on the Locations page is estimated energy billed at our 62/48 tariff, the same figure the site's sessions page shows; the operator's posted price appears only in the charger lines of a site's sessions page, since the feed gives only today's price.
 - **Data window:** history is a rolling 14 days, starting from 8 November 2026.
 - **Technical constraints:**
   - CSP `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`;

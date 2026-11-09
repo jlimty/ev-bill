@@ -15,6 +15,7 @@ import (
 
 	"github.com/jlimty/ev-bill/internal/billing"
 	"github.com/jlimty/ev-bill/internal/live"
+	"github.com/jlimty/ev-bill/internal/mirror"
 	"github.com/jlimty/ev-bill/internal/reqid"
 	"github.com/jlimty/ev-bill/internal/sessions"
 	"github.com/jlimty/ev-bill/internal/store"
@@ -91,10 +92,11 @@ func (p *Pages) Register(mux *http.ServeMux) {
 // nav: the brand links to Locations, and the sessions lists are reached by
 // drilling down from it (UI-5).
 type layoutData struct {
-	Title  string
-	Stream string
-	Tariff tariffKey
-	TZ     string
+	Title     string
+	Stream    string
+	Tariff    tariffKey
+	TZ        string
+	Freshness string // on a streaming page, how fresh charger data is (LIVE-4)
 }
 
 // feedLine is the mirror's status line on the list page (LIVE-4).
@@ -135,8 +137,20 @@ type errorPage struct {
 }
 
 func (p *Pages) layout(title, stream string) layoutData {
-	return layoutData{Title: title, Stream: stream, Tariff: tariffHeader(p.Tariff), TZ: zoneCity(p.Tariff.Location) + " time"}
+	return layoutData{Title: title, Stream: stream, Tariff: tariffHeader(p.Tariff), TZ: zoneCity(p.Tariff.Location) + " time", Freshness: freshness}
 }
+
+// ltaRefresh is how often LTA republishes the EV charging batch file
+// (live-mirror design, Constraints).
+const ltaRefresh = 5 * time.Minute
+
+// freshness is the footer's sentence on a streaming page (LIVE-4). The page
+// redraws itself as soon as new data lands, but the data is a snapshot: LTA
+// republishes it every ltaRefresh and the poller fetches it every
+// mirror.PollInterval, so it can be up to their sum old.
+var freshness = fmt.Sprintf("Charger status is fetched from LTA every %d minutes, so it can be up to %d minutes old; "+
+	"this page refreshes itself when it changes.",
+	int(mirror.PollInterval/time.Minute), int((mirror.PollInterval+ltaRefresh)/time.Minute))
 
 const (
 	// feedDelayedAfter is the age of the last good poll beyond which the feed

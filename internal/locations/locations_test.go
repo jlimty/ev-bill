@@ -76,23 +76,6 @@ func TestParsePrice_LOC6(t *testing.T) {
 	}
 }
 
-func TestValueCents_LOC6(t *testing.T) {
-	tests := []struct{ wh, price, want int64 }{
-		{1000, 6976, 70},
-		{500, 7000, 35},
-		{1, 6976, 0},
-		{60000, 1000000, 600000},
-		{0, 6976, 0},
-		{1, 50000, 1}, // exactly 0.5 cent rounds up
-		{1, 49999, 0},
-	}
-	for _, tt := range tests {
-		if got := ValueCents(tt.wh, tt.price); got != tt.want {
-			t.Errorf("ValueCents(%d, %d) = %d, want %d", tt.wh, tt.price, got, tt.want)
-		}
-	}
-}
-
 func TestObservedHours_LOC4(t *testing.T) {
 	tests := []struct{ samples, want int64 }{{0, 0}, {11, 0}, {12, 1}, {288, 24}, {373, 31}}
 	for _, tt := range tests {

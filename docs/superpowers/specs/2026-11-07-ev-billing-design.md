@@ -73,7 +73,7 @@ A small Go service that bills EV charging sessions, delivered through spec-first
   - **Tariff header (LIVE-4):** a key with one entry per window, a swatch beside "Peak 07–23 · 62¢/kWh" and "Off-peak 23–07 · 48¢/kWh", built from the tariff's own values. It is the colour key for every tariff mark on the pages. The time zone is named once, in the footer ("Times are shown in Singapore time").
   - **Strip legends (VIEW-5):** the per-card peak/off-peak legend goes; the header key replaces it. A strip caption shows the no-data key only when that strip has an hour without data.
   - **Card percentage (VIEW-5):** the card shows "{N}%" alone when the window line already states its observed hours and the site's hours equal them. Otherwise it keeps "{N}% · {H} h avg · observed".
-  - **Facts line (LOC-6):** the value reads "est. $737.05 at posted prices", so the price basis is still named where the money is shown. The notice below the cards keeps the full explanation (the operator's price, not the 62/48 billing tariff).
+  - **Facts line (LOC-6):** the value reads "est. $737.05 at posted prices", so the price basis is still named where the money is shown. Superseded 2026-11-09: the card now reads "… · $114.18 est. at our 62/48 tariff" and matches its site drill-down (`2026-11-09-site-reconcile-design.md`).
 - **UI-5** Navigation is a drill-down from Locations (2026-11-09). It changes these rules:
   - **Header (NAV-1):** no nav. The brand "EV billing" links to `/`, the Locations page. The routes are unchanged: `/sessions` still serves the unfiltered list, which is the only list that shows simulated sessions.
   - **Site list (NAV-2):** the h1 "Sessions at {site name}" has no "Show all sites" link.
