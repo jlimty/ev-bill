@@ -28,6 +28,20 @@ var templateFS embed.FS
 //go:embed static/live.js
 var staticFS embed.FS
 
+// appCSS is the stylesheet every page inlines in its <style>: the Tailwind
+// build of styles/app.css (`make css`). The CSP allows inline styles only, so
+// it is not served as a file. `make css-check` keeps it in step with its
+// source and the templates.
+//
+//go:embed static/app.css
+var appCSS string
+
+// templateFuncs gives the layout the stylesheet. It is our own build output,
+// so it is marked safe CSS; html/template would otherwise filter it.
+var templateFuncs = template.FuncMap{
+	"appCSS": func() template.CSS { return template.CSS(appCSS) }, // #nosec G203 -- embedded build output, not user input
+}
+
 // pageTemplates holds one template set per page, each parsed with the layout
 // and the fragments the page includes. The event stream executes the same
 // fragments from these sets, so the page and the stream cannot disagree.
@@ -44,7 +58,7 @@ func parsePage(name string, fragments ...string) *template.Template {
 	for _, f := range fragments {
 		files = append(files, "templates/"+f+".html")
 	}
-	return template.Must(template.ParseFS(templateFS, files...))
+	return template.Must(template.New("layout.html").Funcs(templateFuncs).ParseFS(templateFS, files...))
 }
 
 // Pages serves the status pages and their event stream. Logger must be
@@ -73,22 +87,15 @@ func (p *Pages) Register(mux *http.ServeMux) {
 
 // layoutData is what the layout needs. Stream is the query live.js passes to
 // GET /events, such as "view=list"; it is empty on pages that do not update,
-// which then load no script and do not refresh (LIVE-3). Nav names the header
-// link of the current page, navSessions or navLocations, which gets
-// aria-current="page"; it is empty on other pages (NAV-1).
+// which then load no script and do not refresh (LIVE-3). The header has no
+// nav: the brand links to Locations, and the sessions lists are reached by
+// drilling down from it (UI-5).
 type layoutData struct {
 	Title  string
 	Stream string
-	Tariff string
+	Tariff tariffKey
 	TZ     string
-	Nav    string
 }
-
-// The header links' names for layoutData.Nav (LOC-7).
-const (
-	navSessions  = "sessions"
-	navLocations = "locations"
-)
 
 // feedLine is the mirror's status line on the list page (LIVE-4).
 type feedLine struct {
@@ -98,11 +105,6 @@ type feedLine struct {
 
 type tableRow struct {
 	Label, Times, Energy, Rate, Cost string
-}
-
-// barLegend labels the bar's two colours with the tariff windows (LIVE-4).
-type barLegend struct {
-	Peak, OffPeak string
 }
 
 // detailPage is the detail page (VIEW-4). Status is the SES-4 status, for the
@@ -117,6 +119,7 @@ type detailPage struct {
 	Status, StatusLabel               string
 	Summary, Started, Stopped         string
 	Location, Operator, Power, Notice string
+	BackURL, BackText                 string // the back link: the site's list, else all sessions (UI-5)
 	Axis                              []axisPiece
 	Ticks                             []axisTick
 	Rows                              []tableRow
@@ -145,6 +148,8 @@ const (
 	sourceRealLabel = "real charger"
 	// statusOccupied is a mirror session's label for SES-4's charging (VIEW-2).
 	statusOccupied = "occupied"
+	// statusNoRecentUpdate is the label for SES-4's stale (UI-6).
+	statusNoRecentUpdate = "no recent update"
 )
 
 // tariffName names the tariff by its own rates, peak then off-peak: "62/48"
@@ -153,22 +158,20 @@ func tariffName(t billing.Tariff) string {
 	return fmt.Sprintf("%d/%d", t.PeakRateCentsPerKWh, t.OffPeakRateCentsPerKWh)
 }
 
-// tariffHeader describes the tariff from its own values (LIVE-4), e.g.
-// "Peak 07:00–23:00 · 62¢/kWh · Off-peak 23:00–07:00 · 48¢/kWh · Singapore time".
-func tariffHeader(t billing.Tariff) string {
-	return peakLegend(t) + " · " + offPeakLegend(t) + " · " + zoneCity(t.Location) + " time"
+// tariffKey is the header's tariff key (LIVE-4, UI-4): each window's hours
+// and rate beside its colour swatch, which is the colour key for every tariff
+// mark on the pages. The time zone is stated once, in the footer.
+type tariffKey struct {
+	Peak, OffPeak string
 }
 
-// peakLegend describes the peak window from the tariff's values (LIVE-4):
-// "Peak 07:00–23:00 · 62¢/kWh". The header and the bar legend both use it.
-func peakLegend(t billing.Tariff) string {
-	return fmt.Sprintf("Peak %02d:00–%02d:00 · %d¢/kWh", t.PeakStartHour, t.PeakEndHour, t.PeakRateCentsPerKWh)
-}
-
-// offPeakLegend describes the off-peak window from the tariff's values
-// (LIVE-4): "Off-peak 23:00–07:00 · 48¢/kWh".
-func offPeakLegend(t billing.Tariff) string {
-	return fmt.Sprintf("Off-peak %02d:00–%02d:00 · %d¢/kWh", t.PeakEndHour, t.PeakStartHour, t.OffPeakRateCentsPerKWh)
+// tariffHeader builds the tariff key from the tariff's own values, e.g.
+// "Peak 07–23 · 62¢/kWh" and "Off-peak 23–07 · 48¢/kWh".
+func tariffHeader(t billing.Tariff) tariffKey {
+	return tariffKey{
+		Peak:    fmt.Sprintf("Peak %02d–%02d · %d¢/kWh", t.PeakStartHour, t.PeakEndHour, t.PeakRateCentsPerKWh),
+		OffPeak: fmt.Sprintf("Off-peak %02d–%02d · %d¢/kWh", t.PeakEndHour, t.PeakStartHour, t.OffPeakRateCentsPerKWh),
+	}
 }
 
 // zoneCity is the city part of a zone name: "Asia/Kuala_Lumpur" -> "Kuala Lumpur".
@@ -199,11 +202,16 @@ func sourceLabel(s sessions.Source) string {
 }
 
 // statusLabel is the status a page shows (VIEW-2). A mirror session that
-// SES-4 calls charging is only known to be occupied, so it reads "occupied";
-// every other status, and every API session's, is shown as it is.
+// SES-4 calls charging is only known to be occupied, so it reads "occupied".
+// A stale session of either source reads "no recent update", which says what
+// stale means: open, but no reading for 15 minutes (UI-6). Every other status
+// is shown as it is. The badge's class and the API keep the SES-4 name.
 func statusLabel(src sessions.Source, status string) string {
-	if src == sessions.SourceMirror && status == sessions.StatusCharging {
+	switch {
+	case src == sessions.SourceMirror && status == sessions.StatusCharging:
 		return statusOccupied
+	case status == sessions.StatusStale:
+		return statusNoRecentUpdate
 	}
 	return status
 }
@@ -283,7 +291,6 @@ func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 	data, err := p.detailData(r.Context(), r.PathValue("id"))
 	if errors.Is(err, sessions.ErrNotFound) {
 		notFound := p.layout("Not found", "")
-		notFound.Nav = navSessions
 		p.render(w, r, http.StatusNotFound, "error", errorPage{
 			layoutData: notFound,
 			Heading:    "Session not found",
@@ -292,7 +299,7 @@ func (p *Pages) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		p.serverError(w, r, navSessions, "detail page", err)
+		p.serverError(w, r, "detail page", err)
 		return
 	}
 	p.render(w, r, http.StatusOK, "detail", data)
@@ -326,8 +333,9 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 		Stopped:     p.stoppedText(sess.Source, v.Status),
 		Energy:      estimated(FormatWh(v.Bill.EnergyWh), est),
 		Total:       estimated(FormatCents(v.Bill.TotalCents), est),
+		BackURL:     "/sessions",
+		BackText:    "All sessions",
 	}
-	data.Nav = navSessions
 	data.Subtitle = "Session · " + sourceSimulated
 	data.Summary = strings.Join([]string{data.Energy, data.Total, FormatDuration(v.LastReadingAt.Sub(sess.StartedAt)), data.StatusLabel}, " · ")
 	if sess.StoppedAt != nil {
@@ -340,6 +348,15 @@ func (p *Pages) detailData(ctx context.Context, id string) (detailPage, error) {
 		}
 		if found {
 			data.Location, data.Operator, data.Power = charger.LocationName, charger.Operator, chargerPower(&charger)
+			// Back to the site's list, the way the visitor drilled down (UI-5).
+			// The name follows VIEW-5's naming rule, as the list's heading does.
+			name, ok, err := p.Store.SiteName(ctx, charger.PostalCode)
+			if err != nil {
+				return detailPage{}, err
+			}
+			if ok {
+				data.BackURL, data.BackText = "/sessions?site="+url.QueryEscape(charger.PostalCode), "Sessions at "+name
+			}
 		}
 		data.Subtitle = joinNonEmpty(" · ", "Session", data.Location)
 		data.Notice = listNotice
@@ -420,12 +437,10 @@ func windowLabel(w billing.Window) (label, class string) {
 	return "Off-peak", "offpeak"
 }
 
-// serverError logs the real error and shows a generic page. nav is the header
-// link the error page marks as current, or "" for none (NAV-1).
-func (p *Pages) serverError(w http.ResponseWriter, r *http.Request, nav, what string, err error) {
+// serverError logs the real error and shows a generic page.
+func (p *Pages) serverError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	reqid.Logger(r.Context(), p.Logger).Error("status page failed", "op", what, "error", err)
 	data := p.layout("Error", "")
-	data.Nav = nav
 	p.render(w, r, http.StatusInternalServerError, "error", errorPage{
 		layoutData: data,
 		Heading:    "Something went wrong",

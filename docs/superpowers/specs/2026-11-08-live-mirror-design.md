@@ -139,7 +139,7 @@ Sleep is still handled correctly (MIR-5), because deploys, restarts and feed out
   - The CSP becomes `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`.
   - Without JS, a `<noscript>` meta refresh reloads the page every 30 s (VIEW-6).
 - **LIVE-4 Page content.**
-  - **Tariff header:** peak and off-peak windows and rates.
+  - **Tariff header:** peak and off-peak windows and rates. (UI-4 in the original spec: a swatch key, "Peak 07–23 · 62¢/kWh", that also keys the charts.)
   - **Boundary labels** on the bar's time axis (VIEW-4), which replace the bar's legend.
   - **Feed status line:** "Live from LTA DataMall · last update 13:45 (2 min ago)". It turns into a warning when the last good poll is more than 15 min old, and says "Mirror off" when no key is configured.
   - **Per row:** location name, operator, kW and AC/DC under the charger ID (VIEW-3), and a "real charger" or "simulated" source label (VIEW-2).

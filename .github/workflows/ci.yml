@@ -19,6 +19,15 @@ jobs:
         with:
           go-version: stable
       - run: make fmt-check
+      # The pinned Tailwind binary (about 100 MB), keyed on the script that
+      # pins its version and digest. tailwind.sh rechecks the digest every run.
+      - uses: actions/cache@v6
+        with:
+          path: bin/tailwindcss-*
+          key: tailwind-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/tailwind.sh') }}
+      # Rebuilds the status pages' CSS with the pinned, checksum-verified
+      # Tailwind CLI and fails if the committed app.css is stale (UI-3).
+      - run: make css-check
       - run: go vet ./...
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:

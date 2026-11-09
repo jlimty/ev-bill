@@ -2,7 +2,7 @@
 TEST_DATABASE_URL ?= postgres://localhost:5432/evbilling_test?sslmode=disable
 export TEST_DATABASE_URL
 
-.PHONY: fmt-check lint test test-tz vuln secrets mutation check run
+.PHONY: fmt-check css css-check lint test test-tz vuln secrets mutation check run
 
 # Fails if gofmt would change any file.
 fmt-check:
@@ -12,6 +12,25 @@ fmt-check:
 		echo "$$unformatted"; \
 		exit 1; \
 	fi
+
+# The status pages' stylesheet. internal/web/styles/app.css is the source;
+# the pinned Tailwind CLI (scripts/tailwind.sh, checksum-verified) builds it,
+# scanning the templates for class names, into internal/web/static/app.css,
+# which is committed and embedded in the binary. The deploy needs no Tailwind.
+CSS_SRC := internal/web/styles/app.css
+CSS_OUT := internal/web/static/app.css
+css:
+	scripts/tailwind.sh --input $(CSS_SRC) --output $(CSS_OUT) --minify
+
+# Fails if the committed app.css differs from a fresh build: after an edit to
+# the stylesheet source or to a template's classes without `make css`, or
+# when the Tailwind CLI cannot run. The fresh build goes to bin/ (git-ignored),
+# emptied first so a build that writes nothing cannot compare an old file.
+css-check:
+	@mkdir -p bin
+	@: > bin/app.css.check
+	@scripts/tailwind.sh --input $(CSS_SRC) --output bin/app.css.check --minify || { echo "css-check: the Tailwind build failed"; exit 1; }
+	@cmp -s bin/app.css.check $(CSS_OUT) || { echo "css-check: $(CSS_OUT) is out of date; run make css and commit it"; exit 1; }
 
 lint:
 	go vet ./...
@@ -72,7 +91,7 @@ mutation:
 		echo "mutation: skipped, internal/billing does not exist yet"; \
 	fi
 
-check: fmt-check lint test test-tz vuln secrets
+check: fmt-check css-check lint test test-tz vuln secrets
 
 # Runs the server against the local evbilling database on port 8080 with API_KEY=dev.
 run:

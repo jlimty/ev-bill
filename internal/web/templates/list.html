@@ -1,6 +1,5 @@
 {{define "content"}}
 <h1>{{.Heading}}</h1>
-{{with .Site}}<p class="scope"><a href="{{.AllURL}}">Show all sites</a></p>
-{{end}}<p class="notice">{{.Notice}}</p>
+<p class="notice">{{.Notice}}</p>
 <div class="card" data-live="list">{{template "list_body" .}}</div>
 {{end}}

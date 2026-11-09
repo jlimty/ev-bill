@@ -95,8 +95,8 @@ func card(t *testing.T, body, name string) string {
 }
 
 // LOC-7, NAV-1: GET / is public, carries the exact CSP and the one
-// same-origin script, opens the locations stream, and the header links the
-// sessions list and the locations page, marking the current one.
+// same-origin script and opens the locations stream. The header has no nav
+// (UI-5): the brand links home, on this page and the sessions pages alike.
 func TestLocations_LOC7_Route(t *testing.T) {
 	e := newEnv(t)
 	rec := e.get("/")
@@ -108,16 +108,14 @@ func TestLocations_LOC7_Route(t *testing.T) {
 	body := rec.Body.String()
 	wantContains(t, body, liveScript, refreshMeta, `<body data-stream="view=locations">`,
 		`<title>Locations · EV billing</title>`, `<h1>Locations</h1>`,
-		`<div data-live="locations">`,
-		`<nav aria-label="Pages"><a href="/" aria-current="page">Locations</a> · <a href="/sessions">Sessions</a></nav>`)
+		`<div data-live="locations">`)
+	wantNoNav(t, body)
 	if n := strings.Count(body, "<script"); n != 1 {
 		t.Errorf("LOC-7: %d script tags, want only live.js", n)
 	}
 
-	list := e.get("/sessions").Body.String()
-	wantContains(t, list, `<nav aria-label="Pages"><a href="/">Locations</a> · <a href="/sessions" aria-current="page">Sessions</a></nav>`)
-	detail := e.get("/sessions/not-a-uuid").Body.String()
-	wantContains(t, detail, `<nav aria-label="Pages"><a href="/">Locations</a> · <a href="/sessions" aria-current="page">Sessions</a></nav>`)
+	wantNoNav(t, e.get("/sessions").Body.String())
+	wantNoNav(t, e.get("/sessions/not-a-uuid").Body.String())
 
 	// live.js applies the locations event to its element like the others (VIEW-6).
 	wantContains(t, e.get("/static/live.js").Body.String(), "source.addEventListener('locations', apply);")
@@ -178,21 +176,21 @@ func TestLocations_LOC4_Copy(t *testing.T) {
 	a := card(t, body, "Alpha Mall")
 	wantContains(t, a, `<p class="sub">Otherco, Testco · 2 connectors</p>`,
 		`<span class="pct" data-watch>25%</span><span class="vh">&nbsp;·&nbsp;</span><span class="label">25 h avg · observed</span>`,
-		`<p class="facts">3 billing sessions · est. 4.0 kWh · price n/a for 1 session · $2.44 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
+		`<p class="facts">3 billing sessions · est. 4.0 kWh · price n/a for 1 session · est. $2.44 at posted prices</p>`)
 	if strings.Contains(a, "collecting data") {
 		t.Errorf("LOC-4: sufficient site has a collecting note: %s", a)
 	}
 
 	b := card(t, body, "Bravo Hub")
 	wantContains(t, b, `<p class="sub">Testco · 1 connector</p>`, `<span class="pct" data-watch>10%</span>`,
-		`<p class="facts">0 billing sessions · est. 0.0 kWh · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
+		`<p class="facts">0 billing sessions · est. 0.0 kWh · est. $0.00 at posted prices</p>`)
 	if strings.Contains(b, "price n/a") {
 		t.Errorf("LOC-6: no price n/a note expected with no sessions: %s", b)
 	}
 
 	c := card(t, body, "Charlie Park")
 	wantContains(t, c, `<span class="pct" data-watch>50%</span>`, `<p class="note">collecting data · 5 h</p>`,
-		`<p class="facts">2 billing sessions · est. 1.0 kWh · price n/a for 2 sessions · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
+		`<p class="facts">2 billing sessions · est. 1.0 kWh · price n/a for 2 sessions · est. $0.00 at posted prices</p>`)
 
 	d := card(t, body, "Delta Point")
 	wantContains(t, d, `<span class="pct" data-watch>n/a</span>`)
@@ -249,7 +247,7 @@ func TestLocations_LOC4_WindowAndHeadlineForms(t *testing.T) {
 		body := e.get("/").Body.String()
 		wantContains(t, body, `<p class="headline">Collecting data · 0 h observed so far</p>`,
 			`<span class="pct" data-watch>n/a</span>`, `<p class="note">collecting data · 0 h</p>`,
-			`<p class="facts">0 billing sessions · est. 0.0 kWh · $0.00 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`)
+			`<p class="facts">0 billing sessions · est. 0.0 kWh · est. $0.00 at posted prices</p>`)
 		if strings.Contains(body, `class="window"`) {
 			t.Errorf("LOC-4: a window line with no sample to date it: %s", body)
 		}
@@ -383,10 +381,14 @@ func TestLocations_LOC5_EmptyOperator(t *testing.T) {
 // LOC-2, LOC-7, VIEW-5: the utilization figure and its labels read as
 // separate words to assistive technology, "25% · 25 h avg · observed", not
 // "25%observed": the two spans are blocks, so a separator must survive layout.
+// A second site observed longer sets the window line's hours, so Alpha Mall's
+// own 25 h differ and its label shows (UI-4).
 func TestLocations_LOC2_UtilReadsAsWords(t *testing.T) {
 	e := newEnv(t)
 	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)},
 		samplesBack("100001", 300, 1, 3, 0))
+	e.observe([]store.ChargerRow{locCharger("B-001", "100002", "Bravo Hub", "Testco", datamall.Available)},
+		samplesBack("100002", 372, 1, 3, 0))
 	c := card(t, e.get("/").Body.String(), "Alpha Mall")
 	start := strings.Index(c, `<p class="util"`)
 	end := strings.Index(c[max(start, 0):], `</p>`)
@@ -487,8 +489,9 @@ func TestLocations_LOC7_LegendAndNotice(t *testing.T) {
 	wantContains(t, body, `<p class="notice">`)
 }
 
-// VIEW-5: the labels name their time bases. The percentage reads "{N}% · {H}
-// h avg · observed"; the count is "Now: ..." and, muted, "As of 13:20: ..."; the
+// VIEW-5, UI-4: the labels name their time bases. The window line states the
+// observed hours, so a card whose hours match shows its percentage alone (the
+// label shows when they differ: TestLocations_LOC2_UtilReadsAsWords); the count is "Now: ..." and, muted, "As of 13:20: ..."; the
 // facts line says whose price the value uses; the card links to the site's
 // sessions; and a second name at the postal code is "also {name}".
 func TestLocations_VIEW5_Labels(t *testing.T) {
@@ -502,12 +505,13 @@ func TestLocations_VIEW5_Labels(t *testing.T) {
 	body := e.get("/").Body.String()
 	c := card(t, body, "Alpha Mall")
 	text := html.UnescapeString(tagRE.ReplaceAllString(c[strings.Index(c, `<p class="util"`):strings.Index(c, `<ul class="cells`)], ""))
-	if got := strings.Join(strings.Fields(text), " "); got != "23% · 31 h avg · observed" {
-		t.Errorf("VIEW-5: percentage = %q, want %q", got, "23% · 31 h avg · observed")
+	if got := strings.Join(strings.Fields(text), " "); got != "23%" {
+		t.Errorf("UI-4: percentage = %q, want %q", got, "23%")
 	}
+	wantContains(t, body, ` · 31 h observed</p>`)
 	wantContains(t, c,
 		`<p class="count" data-watch>Now: 2 busy · 1 free</p>`,
-		`$0.70 est. value at today&#39;s posted price (operator&#39;s price, not the 62/48 billing tariff)</p>`,
+		`est. $0.70 at posted prices</p>`,
 		`<a class="all" href="/sessions?site=100001">All sessions at this site →</a>`,
 		`also Alpha Mall Level 2`)
 
@@ -612,13 +616,15 @@ func TestLocations_VIEW5_CollectingNote(t *testing.T) {
 	})
 }
 
-// VIEW-5: the cell legend (4 items) sits before the first card; each strip
-// caption carries the three tariff swatches; the old 7-item legend at the
-// bottom is gone, and the notice stays last.
+// VIEW-5, UI-4: the cell legend (4 items) sits before the first card; the
+// header's tariff key is the only peak/off-peak key on the page; a strip
+// caption carries the no-data key only when its strip has an hour without
+// data; the old 7-item legend at the bottom is gone, and the notice stays last.
 func TestLocations_VIEW5_Legends(t *testing.T) {
 	e := newEnv(t)
 	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, samplesBack("100001", 300, 1, 3, 0))
 	e.observe([]store.ChargerRow{locCharger("B-001", "100002", "Bravo Hub", "Testco", datamall.Available)}, samplesBack("100002", 300, 1, 3, 0))
+	e.observe([]store.ChargerRow{locCharger("C-001", "100003", "Charlie Park", "Testco", datamall.Available)}, samplesBack("100003", 12, 1, 3, 0))
 	body := e.get("/").Body.String()
 	first := strings.Index(body, "<article")
 	legend := strings.Index(body, `<li><span class="cell busy"></span>busy</li>`)
@@ -628,16 +634,19 @@ func TestLocations_VIEW5_Legends(t *testing.T) {
 	if n := strings.Count(body[:first], `<li><span class="cell `); n != 4 {
 		t.Errorf("VIEW-5: %d cell legend items, want 4", n)
 	}
-	for _, name := range []string{"Alpha Mall", "Bravo Hub"} {
-		c := card(t, body, name)
-		wantContains(t, c,
-			`<li><span class="swatch peak"></span>Peak 07:00–23:00 · 62¢/kWh</li>`,
-			`<li><span class="swatch offpeak"></span>Off-peak 23:00–07:00 · 48¢/kWh</li>`,
-			`<li><span class="swatch nodata"></span>no data</li>`)
-		if n := strings.Count(c, `<span class="swatch `); n != 3 {
-			t.Errorf("VIEW-5: %s has %d swatches, want 3", name, n)
+	wantContains(t, body[:first], tariffText)
+	for _, kind := range []string{"peak", "offpeak"} {
+		if n := strings.Count(body, `<span class="swatch `+kind+`">`); n != 1 {
+			t.Errorf("UI-4: %d %s swatches on the page, want 1 (the header key)", n, kind)
 		}
 	}
+	for _, name := range []string{"Alpha Mall", "Bravo Hub"} { // 25 h: every hour has data
+		if c := card(t, body, name); strings.Contains(c, `class="swatch`) {
+			t.Errorf("UI-4: %s has a swatch; its strip has no empty hour", name)
+		}
+	}
+	wantContains(t, card(t, body, "Charlie Park"), // 1 h: most hours have no data
+		`Busy by hour of day · observed<span class="nodata-key"><span class="swatch nodata"></span>no data</span></p>`)
 	if strings.Contains(body, `class="key"`) || strings.Contains(body, `aria-label="Legend"`) {
 		t.Error("VIEW-5: the bottom legend is still there")
 	}

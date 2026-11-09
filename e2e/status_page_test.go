@@ -967,7 +967,7 @@ func boxes(t *testing.T, page playwright.Page, selector string) []box {
 // TestPages_VIEW3_VIEW7_FitsPhones loads Locations, the sessions list and a
 // detail page at 320, 375 and 1024 px, with a 60-character all-caps site name
 // (plan Review Focus 3). No page or card scrolls sideways; the Cost cell is
-// inside the viewport (VIEW-3); below 40rem the rows, nav links and pager
+// inside the viewport (VIEW-3); below 40rem the rows, the brand link and pager
 // links are at least 44 px tall; and the first Tab focuses the skip link
 // (VIEW-7).
 func TestPages_VIEW3_VIEW7_FitsPhones(t *testing.T) {
@@ -1015,7 +1015,7 @@ func TestPages_VIEW3_VIEW7_FitsPhones(t *testing.T) {
 			if width >= 640 { // 40rem
 				continue
 			}
-			targets := []string{`nav[aria-label="Pages"] a`}
+			targets := []string{`.brand`} // the header's only link (UI-5)
 			switch {
 			case pg.path == "/":
 				targets = append(targets, `.more a`)
@@ -1023,8 +1023,6 @@ func TestPages_VIEW3_VIEW7_FitsPhones(t *testing.T) {
 				targets = append(targets, `.sessions tbody tr[data-key]`, `.sessions thead a`, `.pager a`)
 			case strings.HasPrefix(pg.path, "/sessions/"):
 				targets = append(targets, `.back a`)
-			case strings.HasPrefix(pg.path, "/sessions?site="):
-				targets = append(targets, `.scope a`)
 			}
 			for _, sel := range targets {
 				found := boxes(t, page, sel)
