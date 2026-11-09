@@ -10,12 +10,15 @@ A small Go service that bills EV charging sessions on a peak/off-peak tariff, wi
 
 - Spec (binding authority, rule IDs such as BIL-2 and OPS-1): `docs/superpowers/specs/2026-11-07-ev-billing-design.md`
 - Plan: `docs/superpowers/plans/2026-11-07-ev-billing.md`
+- Specs and plans under `docs/superpowers/` are local working files. `.gitignore` excludes new ones; do not stage new specs or plans, or edits to the ones already committed, and do not link them from `README.md`.
+- `README.md` is the primary documentation. A decision that needs its reasoning kept goes in a short ADR under `docs/adr/` (`NNNN-title.md`: context, decision, consequences).
 - AI mistakes and the guardrail each one led to: `docs/ai-review-log.md`
 
 ## Commands
 
-- `make check`: runs every local gate (`fmt-check`, `css-check`, `lint`, `test`, `test-tz`, `vuln`, `secrets`). It must pass before any commit.
+- `make check`: runs every local gate (`fmt-check`, `docs-check`, `css-check`, `lint`, `test`, `test-tz`, `vuln`, `secrets`). It must pass before any commit.
 - `make fmt-check`: fails if `gofmt` would change a file.
+- `make docs-check`: fails if a Markdown link points at a missing or git-ignored path, at a spec or plan under `docs/superpowers/`, or at a heading that does not exist (`scripts/docs-check.sh`, offline).
 - `make css`: builds the status pages' stylesheet (UI-3) from `internal/web/styles/app.css` into `internal/web/static/app.css` with the pinned Tailwind CLI (`scripts/tailwind.sh` downloads it into `bin/` and checks its SHA-256). Run it after changing the stylesheet source or a template's classes, and commit both files.
 - `make css-check`: fails if the committed `app.css` differs from a fresh build, or if the Tailwind CLI cannot run.
 - `make lint`: `go vet` and `golangci-lint` (includes a rule that forbids `time.Local`).

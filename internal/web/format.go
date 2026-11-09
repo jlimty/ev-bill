@@ -1,4 +1,6 @@
-// Package web serves the server-rendered status pages (UI-1, UI-2).
+// Package web serves the server-rendered pages: Locations at / (LOC-7), the
+// sessions list and site drill-down (UI-1, NAV-1..5), and a session's detail
+// (UI-2, VIEW-4), plus the /events stream that keeps them live (LIVE-1..3).
 package web
 
 import (

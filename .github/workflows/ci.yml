@@ -19,6 +19,8 @@ jobs:
         with:
           go-version: stable
       - run: make fmt-check
+      # Relative Markdown links resolve to committed files and real headings.
+      - run: make docs-check
       # The pinned Tailwind binary (about 100 MB), keyed on the script that
       # pins its version and digest. tailwind.sh rechecks the digest every run.
       - uses: actions/cache@v6
