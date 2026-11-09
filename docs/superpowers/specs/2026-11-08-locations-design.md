@@ -72,6 +72,9 @@ The audience is engineers first, with numbers framed so that someone who runs ch
 - **LOC-3 Hourly profile.** The same ratio, grouped by hour of day in Asia/Singapore, giving 24 values per location.
   - An hour with no samples shows as "no data", visibly different from 0%.
   - Each bar is coloured by the BIL-2 window that hour belongs to: 07:00–22:59 peak, otherwise off-peak.
+  - **Readable strip (amended 2026-11-09 by `2026-11-09-hourly-chart-design.md`):** bars keep the absolute 0–100% scale on a taller strip with faint gridlines at 25, 50 and 75%. The current hour in Asia/Singapore is ringed, and a line above the strip states it: "Now 10:00–11:00 · usually 12% busy" once the site is sufficient (LOC-4), "… · 12% busy so far" before, "… · no data yet" for an hour without samples and "… · n/a" for one without capacity; the tariff window is left to the bar's colour. Hovering another bar shows that hour's line in its place. The strip stays hidden from assistive tech with nothing focusable; the hidden 24-row table is the accessible version. The axis is labelled every 3 hours (00 to 21), thinning to 00, 06, 12, 18 below 360 px.
+  - **Live marker (added 2026-11-09):** while the feed is live, a short red line crosses the current hour's column at the site's busy share now (busy ÷ (busy + free) over the newest observation's connectors, out of service left out), and the line reads "Now 11:00–12:00 · 45% busy · usually 38%" ("… · 38% so far" before LOC-4 sufficiency; "… · 45% busy" with no usual figure). With the feed not live, or no capacity now, there is no marker and the line is unchanged.
+
 - **LOC-4 Data sufficiency.**
   - **Observed time** for a site = its sample count × 5 min, shown in whole hours. Polls can skip a feed update, so this is conservative.
   - **A site is "sufficient"** once it has at least 288 samples (24 h observed).
@@ -113,7 +116,7 @@ The audience is engineers first, with numbers framed so that someone who runs ch
      - name, operator(s) and connector count;
      - the connector grid with its text count;
      - utilization as the card's largest number, labelled "observed";
-     - the 24-hour strip with hour ticks at 00, 06, 12, 18 and 23;
+     - the 24-hour strip with the current hour's line above it and hour ticks every 3 hours (LOC-3, amended 2026-11-09);
      - an observing line under the name (LOC-8);
      - the facts line: billing sessions · energy est. · cost est. at our tariff (LOC-6).
   4. The legends sit as VIEW-5 says: a compact cell legend above the first card and the tariff swatches beside each strip's caption. The estimate notice follows the cards.
