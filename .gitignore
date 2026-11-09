@@ -3,3 +3,4 @@ bin/
 .superpowers/
 .claude/settings.local.json
 coverage-billing.out
+docs/superpowers/

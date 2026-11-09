@@ -44,9 +44,10 @@ flowchart TB
 | Integration | LTA DataMall over HTTPS with Go's `net/http` client | `internal/datamall` |
 | Data | PostgreSQL 18 through `pgx` v5 (no ORM); SQL migrations embedded in the binary and run at startup by `goose` | `internal/store` |
 | Logging | `log/slog` JSON logs with a request ID per request | `internal/server`, `internal/reqid` |
-| Tests | Go `testing` with `-race`; Playwright (`playwright-go`) for the browser tests; `gremlins` for mutation testing | `*_test.go`, `e2e/` |
-| Quality and security | `gofmt`, `go vet`, `golangci-lint`, `govulncheck`, `gitleaks`, Trivy (CycloneDX SBOM), SonarQube Cloud | `Makefile`, `.github/workflows/ci.yml`, `tools/` |
+| Tests | Go `testing` with `-race`, plus runnable `Example` functions in `internal/billing`; Playwright (`playwright-go`) for the browser tests; `gremlins` for mutation testing | `*_test.go`, `e2e/` |
+| Quality and security | `gofmt`, `go vet`, `golangci-lint`, `govulncheck`, `gitleaks`, Trivy (CycloneDX SBOM), SonarQube Cloud; an offline Markdown link check (Perl) | `Makefile`, `.github/workflows/ci.yml`, `tools/`, `scripts/docs-check.sh` |
 | Deploy | Render Blueprint: one free Go web service and one free Postgres 18 database in Singapore, deployed only after CI passes on `main` | `render.yaml` |
+| Documentation | This README (rules, packages, operations), architecture decision records, Go doc comments | `README.md`, `docs/adr/`, package doc comments |
 
 ### Runtime view
 
@@ -112,7 +113,7 @@ Delivery path:
 
 ```mermaid
 flowchart TB
-    PR["Pull request"] --> CI["GitHub Actions checks<br/>lint, test, vuln, secrets, sonar"]
+    PR["Pull request"] --> CI["GitHub Actions checks<br/>lint: gofmt, docs links, CSS, vet, golangci-lint<br/>test, vuln, secrets, sonar"]
     PR -.-> REP["report-only jobs (not gates)<br/>e2e browser test, mutation, sbom (Trivy + CycloneDX)"]
     CI --> BP["Branch protection"]
     BP --> MAIN["Merge to main"]
@@ -148,6 +149,8 @@ At startup and then every 5 minutes, `datamall` fetches the EV charging batch fi
 | `internal/config` | Reads `PORT`, `DATABASE_URL`, `API_KEY` and the optional mirror variables |
 | `internal/sim` | Simulator plans and API client |
 | `internal/testdb` | Test database helper |
+
+Each package has a doc comment saying what it does, and many cite the [rules](#rules) they implement: `go doc ./internal/sessions`. `internal/billing` also has runnable examples in [`example_test.go`](internal/billing/example_test.go): a session split across 23:00, the BIL-6 remainder and half-up rounding. `go test` checks their printed output, so they cannot drift from the code.
 
 ## Quick start
 
@@ -252,7 +255,7 @@ The first poll runs at startup; the feed line on http://localhost:8080/ shows th
 
 ## Locations
 
-`/` shows whether public charging at the watched sites is under-used. It has one card per site in the newest feed observation, and updates live over `/events?view=locations`. Rules LOC-1..8 are in the [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md), amended by the [site reconcile design](docs/superpowers/specs/2026-11-09-site-reconcile-design.md).
+`/` shows whether public charging at the watched sites is under-used. It has one card per site in the newest feed observation, and updates live over `/events?view=locations`.
 
 Observed figures come straight from LTA's occupancy data:
 
@@ -279,6 +282,7 @@ The page's window line covers utilization: the last 14 days, or since the first 
 `make check` runs the local gates and CI runs the same checks. See [`docs/playbook.md`](docs/playbook.md) for detail.
 
 - **lint**: `gofmt` check, `go vet`, `golangci-lint` (forbids `time.Local`, `errcheck` with `check-blank`).
+- **docs-check**: every relative Markdown link resolves to a committed file and an existing heading, and none points at a local spec or plan (`scripts/docs-check.sh`; external links are not fetched).
 - **css-check**: rebuilds the pages' stylesheet with the pinned, checksum-verified Tailwind CLI and fails if the committed `internal/web/static/app.css` is out of date (`make css` rebuilds it).
 - **test**: `go test -race`; coverage at least 80% across `internal/...` and at least 95% for `internal/billing`.
 - **test-tz**: billing and web time tests under `TZ=UTC` and `TZ=America/New_York`.
@@ -307,16 +311,109 @@ Free-tier limits (Render's free-tier terms as of November 2026):
 - JSON keys are matched case-insensitively (Go `encoding/json`), so `{"TIMESTAMP": ...}` is accepted.
 - Out of scope: OCPP, payments, multiple tariffs, tariff changes during a session.
 
-## Documents
+## Decisions
 
-- [Spec](docs/superpowers/specs/2026-11-07-ev-billing-design.md): rule IDs (BIL, SES, API, UI, OPS)
-- [Plan](docs/superpowers/plans/2026-11-07-ev-billing.md)
-- [Locations spec](docs/superpowers/specs/2026-11-08-locations-design.md): rule IDs LOC-1..8 (occupancy samples, utilization, hourly profile, data sufficiency, live connector state, site totals, the page, observing since)
-- [Live mirror spec](docs/superpowers/specs/2026-11-08-live-mirror-design.md): rule IDs MIR-1..12 (poller, scope, observation time, energy estimate, gaps, reconciliation, coexistence with API sessions, charger details, retention, config, lifecycle, occupancies past 48 h) and LIVE-1..4 (event stream, hub, pushed content, page content)
-- [Live mirror plan](docs/superpowers/plans/2026-11-08-live-mirror.md)
-- [Locations plan](docs/superpowers/plans/2026-11-08-locations.md)
-- [Site reconcile design](docs/superpowers/specs/2026-11-09-site-reconcile-design.md) and [plan](docs/superpowers/plans/2026-11-09-site-reconcile.md)
-- [PRODUCT.md](PRODUCT.md): who the pages are for and the product principles
-- [AGENTS.md](AGENTS.md): constraints and rules for coding agents
-- [Delivery playbook](docs/playbook.md)
-- [AI review log](docs/ai-review-log.md)
+The reasoning behind the main choices is kept as short architecture decision records in [`docs/adr/`](docs/adr/):
+
+1. [Integer money and energy](docs/adr/0001-integer-money-and-energy.md)
+2. [Tariff in Singapore time, never the host's](docs/adr/0002-singapore-time-never-local.md)
+3. [Standard library first: no web framework, ORM or JS framework](docs/adr/0003-standard-library-first.md)
+4. [Tailwind CSS from the pinned standalone CLI](docs/adr/0004-tailwind-standalone-cli.md)
+5. [Deploy on Render's free tier](docs/adr/0005-render-free-tier.md)
+6. [Estimate real chargers' energy from rated power](docs/adr/0006-estimated-energy-for-real-chargers.md)
+7. [Server-sent events for live pages](docs/adr/0007-server-sent-events.md)
+
+## Rules
+
+Tests and commit messages name the rule they cover (`BIL-6: conserve Wh on split`). Each rule in one line, as it stands now:
+
+**Billing (BIL)**
+
+- **BIL-1** Money is integer cents, energy integer Wh, rates integer cents per kWh. No floats in billing.
+- **BIL-2** Peak 07:00–23:00 at 62¢/kWh, off-peak 23:00–07:00 at 48¢/kWh, evaluated in `Asia/Singapore`, never `time.Local`. Timestamps are stored in UTC.
+- **BIL-3** Energy between two readings flows at constant power; an interval crossing a boundary is split in proportion to time.
+- **BIL-4** Contiguous time in one window is one segment; a session can have several.
+- **BIL-5** Segment cost = Wh × rate ÷ 1000, rounded half-up to whole cents. The session total is the sum of segment costs.
+- **BIL-6** Splitting conserves energy exactly: the integer remainder goes to each interval's last piece.
+- **BIL-7** An active session is costed up to its latest reading.
+
+**Sessions (SES)**
+
+- **SES-1** Start takes `charger_id` (`^[A-Z0-9-]{1,32}$`), `started_at` and `meter_start_wh`. One active session per charger, else 409.
+- **SES-2** A reading must be at or after the start and at most 5 min in the future. Out-of-order readings are accepted if consistent; an identical duplicate is a no-op, a conflicting one 409, falling energy 422.
+- **SES-3** Stop is validated like a reading. Readings after stop get 409; replaying the same stop returns the original result.
+- **SES-4** Status is derived when read: `charging`, `stale` (no reading for 15 min) or `completed`.
+- **SES-5** Sessions longer than 48 h are rejected (422).
+- **SES-6** Concurrent writes to one session are safe (row lock); a unique (session, timestamp) constraint stops duplicate readings.
+
+**API**
+
+- **API-1** Every POST needs `X-API-Key`, compared in constant time, else 401. GETs are public.
+- **API-2** Errors are `{"error": {"code", "message"}}` with 400, 401, 404, 409 or 422.
+- **API-3** [`api/openapi.yaml`](api/openapi.yaml) is the contract, changed before the handlers; tests validate real responses against it.
+
+**Operations (OPS)**
+
+- **OPS-1** Config comes from the environment; the service fails fast if `PORT`, `DATABASE_URL` or `API_KEY` is missing.
+- **OPS-2** `/healthz` returns 200 when a database ping succeeds within 2 s, else 503.
+- **OPS-3** SIGTERM or SIGINT stops accepting, finishes in-flight requests and exits within 10 s.
+- **OPS-4** SQL migrations are embedded in the binary and applied at startup.
+- **OPS-5** Structured JSON logs with `log/slog`, with a request ID per request.
+
+**Live mirror (MIR)**
+
+- **MIR-1** Poll LTA DataMall at startup and every 5 min, stream-decoding the batch file. The AccountKey and download link are never logged or returned.
+- **MIR-2** Only connectors at the configured postal codes are mirrored, 1 to 100 of them.
+- **MIR-3** A poll's time is the feed's `LastUpdatedTime` in Singapore time. A poll that is unparseable, more than 5 min ahead, or not newer than the stored one is skipped.
+- **MIR-4** Energy is estimated from rated power (DC capped at 50 kW), at most 60 kWh per occupancy, in integer Wh.
+- **MIR-5** A connector unseen for more than 11 min has its session closed at its last reading, so a gap is never billed. If it is still occupied, a new session continues the same occupancy.
+- **MIR-6** Each poll reconciles the feed against open sessions in the database, not memory, through the normal session rules.
+- **MIR-7** `api` and `mirror` sessions never write to each other's; the API refuses writes to a mirror session with 409 `mirror_session`.
+- **MIR-8** Each poll upserts the watched connectors' details (location, operator, plug, power, posted price) into `chargers`.
+- **MIR-9** Every hour, mirror sessions completed more than 14 days ago and occupancy samples older than 14 days are deleted. `api` sessions are kept.
+- **MIR-10** `LTA_ACCOUNT_KEY` is optional; without it the mirror is off.
+- **MIR-11** Server, poller, retention job and hub share one context and stop together within 10 s.
+- **MIR-12** A mirror session is stopped at exactly 48 h, and no new one opens until the connector has been seen free.
+
+**Live updates (LIVE)**
+
+- **LIVE-1** `GET /events` is a server-sent event stream for the `list`, `session` and `locations` views, with a 25 s heartbeat and at most 100 streams.
+- **LIVE-2** One hub fans "changed" signals out; each subscriber's buffer of 1 coalesces them, so a slow browser never blocks the poller.
+- **LIVE-3** Each signal pushes the re-rendered live region, escaped by `html/template`. Without JS, the page refreshes every 30 s.
+- **LIVE-4** Pages show the tariff key, the feed status line and how fresh the charger data is.
+
+**Navigation (NAV)**
+
+- **NAV-1** `/` is Locations, `/sessions` the list, `/sessions/{id}` a session; `/locations` redirects to `/`.
+- **NAV-2** `/sessions?site=<postal>` lists every stored mirror session at that site, with the site's totals; a malformed postal code is 400, an unknown one 404.
+- **NAV-3** The list sorts by `started` or `energy`, either direction, with ties broken on ID.
+- **NAV-4** 50 sessions per page with keyset paging; a bad cursor is 400.
+- **NAV-5** Only the first page of a filter and sort updates live.
+
+**Pages (UI, VIEW)**
+
+- **UI-1** `/sessions` lists sessions newest first, 50 to a page, and updates live.
+- **UI-2** `/sessions/{id}` shows the peak/off-peak bar, a segment table and the total.
+- **UI-3** Pages are styled with Tailwind CSS from the pinned standalone CLI; no Node.
+- **UI-4** Each fact is shown once: one tariff key in the header, one time zone note in the footer.
+- **UI-5** Navigation is a drill-down from Locations; the header has no nav, and a session links back to its site.
+- **UI-6** A stale session is labelled "no recent update"; the API still says `stale`.
+- **VIEW-1** Mirror energy and cost carry "est.", and cost is labelled with our 62/48 tariff.
+- **VIEW-2** An open mirror session shows as "occupied"; sources read "real charger" or "simulated".
+- **VIEW-3** The list has five columns and becomes stacked cards below 40rem, with whole-row tap targets.
+- **VIEW-4** A session's page leads with a summary line and draws its tariff bar on a time axis between boundaries.
+- **VIEW-5** Locations labels its time bases, states the window once, shows busiest and quietest hours as text, and names each site consistently.
+- **VIEW-6** Live updates keep focus and scroll, flash changed items (not under reduced motion), and show the stream's state.
+- **VIEW-7** Skip link, 44 px touch targets, 3:1 contrast for marks, and never colour alone.
+- **VIEW-8** Thousands separators, the year only when not the current one, and "Singapore time" stated.
+
+**Locations (LOC)**
+
+- **LOC-1** Each applied poll writes one occupancy sample per watched site: busy, free and out-of-service counts.
+- **LOC-2** Utilization = busy ÷ (busy + free) over the samples in the last 14 days, in basis points; out of service is not capacity.
+- **LOC-3** The same ratio by hour of day in Singapore time, with the current hour and a live marker shown.
+- **LOC-4** A site needs 288 samples (24 h) before it is ranked or counted in the headline.
+- **LOC-5** Each connector's latest state is shown, muted with "as of" when the feed is not live.
+- **LOC-6** A card's totals cover exactly the sessions its drill-down lists, billed at our tariff.
+- **LOC-7** `/` serves the page and updates it live; every empty state links to the sessions.
+- **LOC-8** Each site says when the app began watching it, or "Last 14 days".

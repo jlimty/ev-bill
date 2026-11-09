@@ -2,7 +2,7 @@
 TEST_DATABASE_URL ?= postgres://localhost:5432/evbilling_test?sslmode=disable
 export TEST_DATABASE_URL
 
-.PHONY: fmt-check css css-check lint test test-tz vuln secrets mutation check run
+.PHONY: fmt-check docs-check css css-check lint test test-tz vuln secrets mutation check run
 
 # Fails if gofmt would change any file.
 fmt-check:
@@ -31,6 +31,12 @@ css-check:
 	@: > bin/app.css.check
 	@scripts/tailwind.sh --input $(CSS_SRC) --output bin/app.css.check --minify || { echo "css-check: the Tailwind build failed"; exit 1; }
 	@cmp -s bin/app.css.check $(CSS_OUT) || { echo "css-check: $(CSS_OUT) is out of date; run make css and commit it"; exit 1; }
+
+# Fails if a Markdown link points at a missing or git-ignored path, at a local
+# spec or plan under docs/superpowers/, or at a heading that does not exist.
+# External links are not fetched.
+docs-check:
+	scripts/docs-check.sh
 
 lint:
 	go vet ./...
@@ -91,7 +97,7 @@ mutation:
 		echo "mutation: skipped, internal/billing does not exist yet"; \
 	fi
 
-check: fmt-check css-check lint test test-tz vuln secrets
+check: fmt-check docs-check css-check lint test test-tz vuln secrets
 
 # Runs the server against the local evbilling database on port 8080 with API_KEY=dev.
 run:
