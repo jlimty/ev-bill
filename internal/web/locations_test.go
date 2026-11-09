@@ -413,13 +413,181 @@ func TestLocations_LOC2_UtilReadsAsWords(t *testing.T) {
 	}
 }
 
+// LOC-3: each hour's label line. A site with 24 h observed (LOC-4) reads
+// "usually"; before that, "so far", so a day of data is not called a pattern.
+// An hour without samples is "no data yet"; one without capacity is "n/a".
+// The tariff window is left out: the bar's colour already shows it.
+func TestHourLine_LOC3(t *testing.T) {
+	quarter := store.HourAggregate{Samples: 4, Occupied: 1, Available: 3} // 25%
+	for _, tc := range []struct {
+		name       string
+		h          int
+		agg        store.HourAggregate
+		sufficient bool
+		want       string
+	}{
+		{"sufficient, peak", 10, store.HourAggregate{Samples: 8, Occupied: 1, Available: 7}, true, "10:00–11:00 · usually 13% busy"},
+		{"collecting, off-peak", 23, quarter, false, "23:00–00:00 · 25% busy so far"},
+		{"first peak hour", 7, quarter, true, "07:00–08:00 · usually 25% busy"},
+		{"last off-peak hour", 6, quarter, true, "06:00–07:00 · usually 25% busy"},
+		{"no samples", 3, store.HourAggregate{}, true, "03:00–04:00 · no data yet"},
+		{"no capacity", 12, store.HourAggregate{Samples: 2}, true, "12:00–13:00 · n/a"},
+	} {
+		if got := hourLine(tc.h, tc.agg, tc.sufficient); got != tc.want {
+			t.Errorf("%s: hourLine = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// LOC-3: the bar for the current hour in Asia/Singapore is marked, and the
+// line above the strip states that hour. Times are UTC instants, so this
+// means the same under make test-tz; 23:40 SGT is 15:40 UTC, so a UTC or
+// New York hour would mark the wrong bar.
+func TestLocations_LOC3_CurrentHour(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+		bar  int // index of the current bar
+		line string
+	}{
+		{"00:20 SGT", fixedNow(), 0, `<p class="hour-now">Now 00:00–01:00 · 25% busy so far</p>`},
+		{"23:40 SGT", time.Date(2026, 11, 6, 15, 40, 0, 0, time.UTC), 23, `<p class="hour-now">Now 23:00–00:00 · 25% busy so far</p>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.p.Now = func() time.Time { return tc.now }
+			var samples []store.OccupancySample
+			for h := range 24 { // one sample in every hour of 6 Nov SGT, 1 of 4 busy
+				samples = append(samples, store.OccupancySample{PostalCode: "100001", ObservedAt: sgt(h, 30, 6).Add(-24 * time.Hour), Occupied: 1, Available: 3})
+			}
+			e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, samples)
+			body := card(t, e.get("/").Body.String(), "Alpha Mall")
+			wantContains(t, body, tc.line)
+			bars := regexp.MustCompile(`<li class="hour [^"]*"`).FindAllString(body, -1)
+			if len(bars) != 24 {
+				t.Fatalf("LOC-3: %d bars, want 24", len(bars))
+			}
+			for i, b := range bars {
+				if strings.Contains(b, " current") != (i == tc.bar) {
+					t.Errorf("LOC-3: bar %d = %s; want only bar %d current", i, b, tc.bar)
+				}
+			}
+		})
+	}
+}
+
+// LOC-3: each bar carries its own line, shown in place of the current
+// hour's line on hover; the strip stays hidden from assistive tech and holds
+// nothing focusable, since the hidden table is the accessible version. The
+// mark and the line show even when the feed is not live (LOC-5 muted).
+func TestLocations_LOC3_BarLinesAndMuted(t *testing.T) {
+	e := newEnv(t) // no feed: the card is muted
+	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, nil)
+	body := card(t, e.get("/").Body.String(), "Alpha Mall")
+	wantContains(t, body, `<ul class="cells muted"`,
+		`<p class="hour-now">Now 00:00–01:00 · no data yet</p>`,
+		`<li class="hour nodata current" title="00:00–01:00 · no data"><span class="fill"></span><span class="hour-line">00:00–01:00 · no data yet</span></li>`,
+		`<li class="hour nodata" title="07:00–08:00 · no data"><span class="fill"></span><span class="hour-line">07:00–08:00 · no data yet</span></li>`)
+	strip := body[strings.Index(body, `<ol class="strip"`):strings.Index(body, `</ol>`)]
+	if !strings.HasPrefix(strip, `<ol class="strip" aria-hidden="true">`) || strings.Contains(strip, "tabindex") {
+		t.Errorf("LOC-3: the strip must stay aria-hidden with nothing focusable: %s", strip)
+	}
+}
+
+// LOC-3: the axis is labelled every 3 hours in 24-hour time, 00 to 21.
+func TestLocations_LOC3_Ticks(t *testing.T) {
+	e := newEnv(t)
+	e.observe([]store.ChargerRow{locCharger("A-001", "100001", "Alpha Mall", "Testco", datamall.Available)}, nil)
+	body := card(t, e.get("/").Body.String(), "Alpha Mall")
+	ticks := body[strings.Index(body, `<div class="ticks"`):]
+	ticks = ticks[:strings.Index(ticks, "</div>")]
+	got := strings.Fields(html.UnescapeString(tagRE.ReplaceAllString(ticks, " ")))
+	if want := []string{"00", "03", "06", "09", "12", "15", "18", "21"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("LOC-3: ticks = %v, want %v", got, want)
+	}
+}
+
+// LOC-3 (live marker): the current hour's line with the live level first,
+// then the usual figure ("usually" once sufficient, "so far" before), or the
+// live level alone when the hour has no usual figure.
+func TestLiveLine_LOC3(t *testing.T) {
+	usual := store.HourAggregate{Samples: 8, Occupied: 3, Available: 5} // 37.5% -> 38%
+	for _, tc := range []struct {
+		name       string
+		agg        store.HourAggregate
+		sufficient bool
+		want       string
+	}{
+		{"sufficient", usual, true, "11:00–12:00 · 45% busy · usually 38%"},
+		{"collecting", usual, false, "11:00–12:00 · 45% busy · 38% so far"},
+		{"no samples", store.HourAggregate{}, true, "11:00–12:00 · 45% busy"},
+		{"no capacity", store.HourAggregate{Samples: 3}, true, "11:00–12:00 · 45% busy"},
+	} {
+		if got := liveLine(11, tc.agg, tc.sufficient, 45); got != tc.want {
+			t.Errorf("%s: liveLine = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// liveSite stores a site whose connectors are as given, with one sample in
+// hour 00 SGT at 1 of 4 busy (25%, not sufficient).
+func liveSite(e *env, statuses ...datamall.Status) {
+	e.t.Helper()
+	var rows []store.ChargerRow
+	for i, st := range statuses {
+		rows = append(rows, locCharger(fmt.Sprintf("A-%03d", i+1), "100001", "Alpha Mall", "Testco", st))
+	}
+	e.observe(rows, []store.OccupancySample{{PostalCode: "100001", ObservedAt: sgt(0, 5, 7), Occupied: 1, Available: 3}})
+}
+
+// LOC-3 (live marker): while the feed is live, the current hour's bar holds a
+// red marker at the site's busy share now (busy ÷ busy + free, out of service
+// left out), and the line compares it with the usual figure.
+func TestLocations_LOC3_LiveMarker(t *testing.T) {
+	e := newEnv(t)
+	e.p.Feed = feedState(live.FeedState{Enabled: true, LastGood: fixedNow().Add(-2 * time.Minute)})
+	liveSite(e, datamall.Occupied, datamall.Occupied, datamall.Available, datamall.Available, datamall.Unavailable) // 2 of 4 -> 50%
+	body := card(t, e.get("/").Body.String(), "Alpha Mall")
+	wantContains(t, body,
+		`<p class="hour-now">Now 00:00–01:00 · 50% busy · 25% so far</p>`,
+		`<li class="hour offpeak current" title="00:00–01:00 · 25% · off-peak"><span class="fill" style="height:25%"></span><span class="live" style="--h:0;--live:50"></span>`)
+	if n := strings.Count(body, `class="live"`); n != 1 {
+		t.Errorf("LOC-3: %d live markers, want 1", n)
+	}
+}
+
+// LOC-3 (live marker): no marker when the feed is not live (a last-known
+// reading may be from another hour) or when no connector has capacity now.
+func TestLocations_LOC3_LiveMarkerHidden(t *testing.T) {
+	t.Run("feed not live", func(t *testing.T) {
+		e := newEnv(t) // no feed: muted
+		liveSite(e, datamall.Occupied, datamall.Available)
+		body := card(t, e.get("/").Body.String(), "Alpha Mall")
+		wantContains(t, body, `<p class="hour-now">Now 00:00–01:00 · 25% busy so far</p>`)
+		if strings.Contains(body, `class="live"`) {
+			t.Errorf("LOC-3: a marker while the feed is not live: %s", body)
+		}
+	})
+	t.Run("every connector out of service", func(t *testing.T) {
+		e := newEnv(t)
+		e.p.Feed = feedState(live.FeedState{Enabled: true, LastGood: fixedNow().Add(-2 * time.Minute)})
+		liveSite(e, datamall.Unavailable, datamall.Unavailable)
+		body := card(t, e.get("/").Body.String(), "Alpha Mall")
+		wantContains(t, body, `<p class="hour-now">Now 00:00–01:00 · 25% busy so far</p>`)
+		if strings.Contains(body, `class="live"`) {
+			t.Errorf("LOC-3: a marker with no capacity now: %s", body)
+		}
+	})
+}
+
 // tagRE matches an HTML tag, for reading a fragment's text.
 var tagRE = regexp.MustCompile(`<[^>]*>`)
 
-// LOC-3: 24 bars, one per hour of the day in Asia/Singapore. Hours with
-// samples are coloured by tariff window (IsPeakHour) with a height of their
-// whole percent; hours without are "no data", unlike 0%. A visually hidden
-// table carries the same 24 values.
+// LOC-3: 24 bars, one per hour of the day in Asia/Singapore. Each hour is a
+// full-height column (so a quiet hour is as easy to hover as a busy one)
+// holding a fill: coloured by tariff window (IsPeakHour) with a height of its
+// whole percent, or "no data", unlike 0%. A visually hidden table carries the
+// same 24 values.
 func TestLocations_LOC3_Strip(t *testing.T) {
 	e := newEnv(t)
 	at := func(day, h, m, occ, avail int) store.OccupancySample {
@@ -441,20 +609,20 @@ func TestLocations_LOC3_Strip(t *testing.T) {
 	}
 	wantContains(t, body,
 		`<ol class="strip" aria-hidden="true">`,
-		`<li class="hour peak" style="height:25%" title="19:00–20:00 · 25% · peak"></li>`,
-		`<li class="hour offpeak" style="height:0%" title="03:00–04:00 · 0% · off-peak"></li>`,
-		`<li class="hour offpeak" style="height:33%" title="23:00–00:00 · 33% · off-peak"></li>`,
-		`<li class="hour peak" style="height:67%" title="07:00–08:00 · 67% · peak"></li>`,
-		`<li class="hour peak" style="height:100%" title="22:00–23:00 · 100% · peak"></li>`,
-		`<li class="hour nodata" title="06:00–07:00 · no data"></li>`,
-		`<li class="hour nodata" title="00:00–01:00 · no data"></li>`,
+		`<li class="hour peak" title="19:00–20:00 · 25% · peak"><span class="fill" style="height:25%"></span>`,
+		`<li class="hour offpeak" title="03:00–04:00 · 0% · off-peak"><span class="fill" style="height:0%"></span>`,
+		`<li class="hour offpeak" title="23:00–00:00 · 33% · off-peak"><span class="fill" style="height:33%"></span>`,
+		`<li class="hour peak" title="07:00–08:00 · 67% · peak"><span class="fill" style="height:67%"></span>`,
+		`<li class="hour peak" title="22:00–23:00 · 100% · peak"><span class="fill" style="height:100%"></span>`,
+		`<li class="hour nodata" title="06:00–07:00 · no data"><span class="fill"></span>`,
+		`<li class="hour nodata current" title="00:00–01:00 · no data"><span class="fill"></span>`,
 		`<tr><th scope="row">19:00–20:00</th><td>25%</td><td>peak</td></tr>`,
 		`<tr><th scope="row">03:00–04:00</th><td>0%</td><td>off-peak</td></tr>`,
 		`<tr><th scope="row">06:00–07:00</th><td>no data</td><td>off-peak</td></tr>`,
-		`<li class="hour nodata" title="12:00–13:00 · n/a"></li>`,
+		`<li class="hour nodata" title="12:00–13:00 · n/a"><span class="fill"></span>`,
 		`<tr><th scope="row">12:00–13:00</th><td>n/a</td><td>peak</td></tr>`,
 	)
-	if n := strings.Count(body, `<li class="hour nodata"`); n != 19 {
+	if n := strings.Count(body, `<li class="hour nodata`); n != 19 {
 		t.Errorf("LOC-3: %d hours without a bar, want 19 (18 no data, 1 n/a)", n)
 	}
 	if n := strings.Count(body, `<tr><th scope="row">`); n != 24 {

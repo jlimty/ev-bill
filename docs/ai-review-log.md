@@ -53,6 +53,8 @@ Every notable AI mistake, how it was caught, and what guardrail (if any) now pre
 | 47 | 2026-11-08 | Locations final / VIEW-4, SES-4 | A stale session showed a stale badge next to "Stopped: still charging" | review | A stale session's Stopped line reads "not stopped"; the spec copy table says so | Test |
 | 48 | 2026-11-08 | Locations final / NAV-1 | The /locations redirect did not set the security headers the CSP comment says every response gets | review | `locationsRedirect` calls `setSecurityHeaders` first | Test checks CSP and nosniff on the redirect |
 | 49 | 2026-11-09 | Site reconcile / LOC-6 | A test asserting the Locations page shows no posted price searched the whole HTML, so it failed once the inlined stylesheet gained a `content: "posted "` rule, a false alarm about page content | test (`make check`) | The assertion reads only the page's `<main>` | Test |
+| 50 | 2026-11-09 | Hourly chart / LOC-3 | A narrow-screen rule from the old axis (`.t06, .t18` hidden below 360 px) was left in place next to the new one, so phones under 360 px showed only 00 and 12 | review | Removed the old rule | None: layout below 360 px is checked in the browser, not by a Go test |
+| 51 | 2026-11-09 | Hourly chart / LOC-3 | Only the painted part of each bar took hover, so the quiet hours the change was for were a few pixels tall to hover or tap | review | Each hour is a full-height column holding its fill | Test: the strip markup puts the fill inside the column |
 
 ## Tally
 
@@ -69,7 +71,7 @@ Rows counted by the "Caught by" column (48 rows):
 | implementer's own mutation testing | 33 | 1 |
 | test, lint, mutation | none | 0 |
 
-Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32, 33, 36, 37, 39, 40, 41, 42, 43, 45, 46, 47, 48, 49), a gate change shown failing (44), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30, 34, 35, 38). Rows 3, 14, 17, 29, 30, 34, 35 and 38 are "none" decisions; 14, 17, 29, 30, 34, 35 and 38 give a reason or note, 3 does not.
+Each row has one catcher, so no row is counted twice. Every row has a guardrail decision: lint rule (2), test (5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 21, 22, 23, 25, 26, 27, 28, 31, 32, 33, 36, 37, 39, 40, 41, 42, 43, 45, 46, 47, 48, 49, 51), a gate change shown failing (44), spec rules plus tests (24), AGENTS.md rule (1), Sonar condition or rule kept in the gate (4, 8, 19, 20), or none (3, 14, 17, 29, 30, 34, 35, 38, 50). Rows 3, 14, 17, 29, 30, 34, 35, 38 and 50 are "none" decisions; 14, 17, 29, 30, 34, 35, 38 and 50 give a reason or note, 3 does not.
 
 ## Mutation baseline
 
