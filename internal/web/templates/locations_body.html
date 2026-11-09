@@ -19,10 +19,11 @@
 <p class="count" data-watch>{{.Count}}</p>
 <div class="profile">
 <p class="sub caption" aria-hidden="true">Busy by hour of day · observed{{if .NoData}}<span class="nodata-key"><span class="swatch nodata"></span>no data</span>{{end}}</p>
+<p class="hour-now">{{.NowLine}}</p>
 <ol class="strip" aria-hidden="true">
-{{range .Hours}}<li class="hour {{.Class}}"{{with .Height}} style="height:{{.}}%"{{end}} title="{{.Title}}"></li>
+{{range .Hours}}<li class="hour {{.Class}}{{if .Current}} current{{end}}" title="{{.Title}}"><span class="fill"{{with .Height}} style="height:{{.}}%"{{end}}></span>{{if .Live}}<span class="live" style="--h:{{.Hour}};--live:{{.Live}}"></span>{{end}}<span class="hour-line">{{.Line}}</span></li>
 {{end}}</ol>
-<div class="ticks" aria-hidden="true"><span class="t00">00</span><span class="t06">06</span><span class="t12">12</span><span class="t18">18</span><span class="t23">23</span></div>
+<div class="ticks" aria-hidden="true"><span class="t00">00</span><span class="t03">03</span><span class="t06">06</span><span class="t09">09</span><span class="t12">12</span><span class="t15">15</span><span class="t18">18</span><span class="t21">21</span></div>
 <div class="vh"><table>
 <caption>{{.Name}}: observed utilization by hour of day</caption>
 <thead><tr><th scope="col">Hour</th><th scope="col">Busy</th><th scope="col">Window</th></tr></thead>

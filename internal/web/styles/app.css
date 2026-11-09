@@ -491,22 +491,52 @@
     margin-left: --spacing(3);
     color: var(--color-zinc-500); font-weight: var(--font-weight-normal);
   }
+  /* LOC-3: the current hour's line sits above the strip; hovering a bar shows
+     that bar's line in the same place. */
+  .hour-now, .hour-line {
+    margin: 0 0 --spacing(2); min-height: var(--text-sm--line-height);
+    font-size: var(--text-sm); line-height: var(--text-sm--line-height);
+    color: var(--color-zinc-700); font-variant-numeric: tabular-nums;
+  }
+  .hour-line { display: none; position: absolute; left: 0; right: 0; bottom: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .profile:has(.hour:hover) .hour-now { visibility: hidden; }
+  .hour:hover .hour-line { display: block; }
+  /* Absolute 0–100% scale (LOC-3), with faint gridlines at 25, 50 and 75%. */
   .strip {
-    display: flex; align-items: flex-end; gap: 2px; height: 4.5rem;
+    position: relative;
+    display: flex; align-items: stretch; height: 8rem;
     list-style: none; margin: 0; padding: 0;
     border-bottom: 1px solid var(--color-zinc-300);
+    background: repeating-linear-gradient(to top, transparent 0 calc(25% - 1px), var(--color-zinc-200) calc(25% - 1px) 25%);
   }
-  .hour { flex: 1 1 0; min-width: 0; min-height: 2px; border-radius: 2px 2px 0 0; }
-  .hour.peak { background: var(--color-peak); box-shadow: inset 0 0 0 1px var(--color-peak-edge); }
-  .hour.offpeak { background: var(--color-offpeak); }
-  .hour.nodata { height: --spacing(2); border: 1px dotted var(--color-mark-muted); border-bottom: 0; }
+  /* Each hour is a full-height column, so a quiet hour is as easy to hover as a
+     busy one; padding instead of a gap leaves no dead zones between columns.
+     The column stays unpositioned, so .hour-line still sits against .strip. */
+  .hour { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; padding-inline: 1.5px; }
+  .fill { display: block; min-height: 2px; border-radius: 3px 3px 0 0; }
+  .hour.current .fill { outline: 2px solid var(--color-zinc-950); outline-offset: 1px; }
+  .hour.peak .fill { background: var(--color-peak); box-shadow: inset 0 0 0 1px var(--color-peak-edge); }
+  .hour.offpeak .fill { background: var(--color-offpeak); }
+  .hour.nodata .fill { height: --spacing(2); border: 1px dotted var(--color-mark-muted); border-bottom: 0; }
+  .hour:hover .fill { opacity: 0.75; }
+  /* The live marker (LOC-3): the busy share now, a red line across the current
+     hour's column. Positioned against .strip from inline --h and --live, so the
+     column stays unpositioned and the hover label keeps .strip as its box. */
+  .live {
+    position: absolute; z-index: 1; pointer-events: none;
+    left: calc(var(--h) * 100% / 24 - 3px); width: calc(100% / 24 + 6px);
+    bottom: calc(var(--live) * 1% - 1.5px); height: 3px;
+    background: var(--color-red-600); border-radius: 1.5px;
+  }
   .ticks {
-    display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); column-gap: 2px;
+    display: grid; grid-template-columns: repeat(24, minmax(0, 1fr));
     margin-top: --spacing(1);
     font-size: var(--text-xs); line-height: 1rem; color: var(--color-zinc-500);
     font-variant-numeric: tabular-nums; white-space: nowrap;
   }
-  .t00 { grid-column: 1; } .t06 { grid-column: 7; } .t12 { grid-column: 13; } .t18 { grid-column: 19; } .t23 { grid-column: 24; justify-self: end; }
+  .t00 { grid-column: 1; } .t03 { grid-column: 4; } .t06 { grid-column: 7; } .t09 { grid-column: 10; }
+  .t12 { grid-column: 13; } .t15 { grid-column: 16; } .t18 { grid-column: 19; } .t21 { grid-column: 22; }
+  @media (width < 360px) { .t03, .t09, .t15, .t21 { display: none; } }
   .hours { margin: --spacing(3) 0 0; font-variant-numeric: tabular-nums; }
 
   .facts { margin: --spacing(6) 0 0; color: var(--color-zinc-500); font-size: var(--text-sm); line-height: var(--text-sm--line-height); font-variant-numeric: tabular-nums; }
@@ -585,7 +615,6 @@
     .billing tfoot td:empty { display: none; }
     .billing tfoot th { margin-right: auto; }
   }
-  @media (width < 360px) { .t06, .t18 { display: none; } }
 }
 
 @keyframes flash { from { background-color: color-mix(in oklab, var(--color-blue-500) 14%, transparent); } }

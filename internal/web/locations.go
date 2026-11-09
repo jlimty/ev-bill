@@ -53,6 +53,7 @@ type siteCard struct {
 	Util              string // "23%" or "n/a"
 	UtilLabel         string // "31 h avg · observed" when the window line does not already say so (VIEW-5, UI-4)
 	Hours             []hourBar
+	NowLine           string // the current hour's line above the strip (LOC-3)
 	NoData            bool   // some hour of the strip has no data, so the strip shows the no-data key (UI-4)
 	HoursLine         string // busiest and quietest hours, for a sufficient site (VIEW-5)
 	Link              string // the site's sessions (NAV-2)
@@ -67,9 +68,15 @@ type cell struct {
 
 // hourBar is one hour of the 24-hour strip and its row in the hidden table
 // (LOC-3). Height is the whole percent, such as "25", and is empty for an
-// hour without one.
+// hour without one. Line is the hour's sentence, shown above the strip for
+// the current hour and on hover for the others; Current marks the current
+// hour in the tariff's location.
 type hourBar struct {
 	Class, Height, Title, Span, Value, Window string
+	Line                                      string
+	Current                                   bool
+	Hour                                      int    // 0–23, for the live marker's position
+	Live                                      string // the busy share now, "45", on the current bar while the feed is live
 }
 
 // locationsRedirect sends the old /locations address to the home page (NAV-1).
@@ -172,8 +179,10 @@ func (p *Pages) locationsData(ctx context.Context) (locationsPage, error) {
 	if muted {
 		lead = "As of " + p.asOf(now, newest) + ": "
 	}
+	// LOC-3: the current hour in the tariff's location, never the server's.
+	nowHour := now.In(p.Tariff.Location).Hour()
 	for _, s := range locations.Order(sites) {
-		c, err := p.siteCard(now, byPostal[s.PostalCode], activity[s.PostalCode], muted, lead, windowHours, maxHours)
+		c, err := p.siteCard(now, byPostal[s.PostalCode], activity[s.PostalCode], muted, lead, windowHours, maxHours, nowHour)
 		if err != nil {
 			return locationsPage{}, err
 		}
@@ -211,7 +220,7 @@ func (p *Pages) windowLine(now, earliest time.Time, maxHours int64) (line string
 // (VIEW-5). The facts are the site's sessions billed as its drill-down bills
 // them, at the same now. The window line's own hours (windowHours, maxHours)
 // decide whether the collecting note would only repeat it.
-func (p *Pages) siteCard(now time.Time, a store.LocationAggregate, act store.SiteActivity, muted bool, lead string, windowHours bool, maxHours int64) (siteCard, error) {
+func (p *Pages) siteCard(now time.Time, a store.LocationAggregate, act store.SiteActivity, muted bool, lead string, windowHours bool, maxHours int64, nowHour int) (siteCard, error) {
 	hours := locations.ObservedHours(a.Samples)
 	totals, err := billSite(act.Sessions, p.Tariff, now)
 	if err != nil {
@@ -245,8 +254,20 @@ func (p *Pages) siteCard(now time.Time, a store.LocationAggregate, act store.Sit
 		c.Collecting = fmt.Sprintf("collecting data · %d h", hours)
 	}
 	c.Cells, c.Count = cells(a.Chargers, lead)
+	sufficient := locations.Sufficient(a.Samples)
+	livePct, live := liveShare(a.Chargers, muted)
 	for h, agg := range a.Hours {
 		bar := hour(h, agg)
+		bar.Hour = h
+		bar.Line = hourLine(h, agg, sufficient)
+		if h == nowHour {
+			bar.Current = true
+			c.NowLine = "Now " + bar.Line
+			if live {
+				bar.Live = fmt.Sprint(livePct)
+				c.NowLine = "Now " + liveLine(h, agg, sufficient, livePct)
+			}
+		}
 		c.NoData = c.NoData || bar.Class == "nodata"
 		c.Hours = append(c.Hours, bar)
 	}
@@ -339,6 +360,67 @@ func hour(h int, agg store.HourAggregate) hourBar {
 	}
 	bar.Title = bar.Span + " · " + bar.Value
 	return bar
+}
+
+// hourLine is hour h's sentence (LOC-3): "10:00–11:00 · usually 12% busy"
+// once the site is sufficient (LOC-4), "… · 12% busy so far" before, so a day
+// of data is not called a pattern; "… · no data yet" for an hour without
+// samples and "… · n/a" for one without capacity. It leaves out the tariff
+// window, which the bar's colour already shows.
+func hourLine(h int, agg store.HourAggregate, sufficient bool) string {
+	span := hourSpan(h)
+	bp, ok := locations.UtilizationBP(agg.Occupied, agg.Available)
+	switch {
+	case ok:
+		if sufficient {
+			return fmt.Sprintf("%s · usually %d%% busy", span, locations.PercentFromBP(bp))
+		}
+		return fmt.Sprintf("%s · %d%% busy so far", span, locations.PercentFromBP(bp))
+	case agg.Samples > 0:
+		return span + " · n/a"
+	}
+	return span + " · no data yet"
+}
+
+// liveShare is a site's busy share now, as a whole percent, for the live
+// marker (LOC-3): busy ÷ (busy + free) over its connectors in the newest
+// observation, out of service left out (LOC-2). It is not ok while the feed
+// is not live (muted), since a last-known reading may be from another hour,
+// or when no connector has capacity.
+func liveShare(chargers []store.ChargerRow, muted bool) (pct int64, ok bool) {
+	if muted {
+		return 0, false
+	}
+	var busy, free int64
+	for _, c := range chargers {
+		switch c.Status {
+		case datamall.Occupied:
+			busy++
+		case datamall.Available:
+			free++
+		}
+	}
+	bp, ok := locations.UtilizationBP(busy, free)
+	if !ok {
+		return 0, false
+	}
+	return locations.PercentFromBP(bp), true
+}
+
+// liveLine is the current hour's sentence with the live level (LOC-3):
+// "11:00–12:00 · 45% busy · usually 38%", "… · 45% busy · 38% so far" for a
+// site not yet sufficient (LOC-4), or "11:00–12:00 · 45% busy" when the hour
+// has no usual figure.
+func liveLine(h int, agg store.HourAggregate, sufficient bool, livePct int64) string {
+	line := fmt.Sprintf("%s · %d%% busy", hourSpan(h), livePct)
+	bp, ok := locations.UtilizationBP(agg.Occupied, agg.Available)
+	switch {
+	case !ok:
+		return line
+	case sufficient:
+		return fmt.Sprintf("%s · usually %d%%", line, locations.PercentFromBP(bp))
+	}
+	return fmt.Sprintf("%s · %d%% so far", line, locations.PercentFromBP(bp))
 }
 
 // plural formats n with the singular or plural noun: "1 connector", "2 connectors".
